@@ -17,7 +17,7 @@ import io.fabric8.kubernetes.api.model.Service;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
 import io.fabric8.kubernetes.api.model.apps.StatefulSet;
 import io.fabric8.kubernetes.api.model.apps.StatefulSetBuilder;
-import io.fabric8.kubernetes.api.model.rbac.KubernetesClusterRoleBinding;
+import io.fabric8.kubernetes.api.model.rbac.ClusterRoleBinding;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientException;
 import io.fabric8.kubernetes.client.dsl.Resource;
@@ -1101,8 +1101,8 @@ public class KafkaAssemblyOperator extends AbstractAssemblyOperator<KubernetesCl
         }
 
         Future<ReconciliationState> kafkaInitClusterRoleBinding() {
-            KubernetesClusterRoleBinding desired = kafkaCluster.generateClusterRoleBinding(namespace);
-            Future<ReconcileResult<KubernetesClusterRoleBinding>> fut = clusterRoleBindingOperator.reconcile(
+            ClusterRoleBinding desired = kafkaCluster.generateClusterRoleBinding(namespace);
+            Future<ReconcileResult<ClusterRoleBinding>> fut = clusterRoleBindingOperator.reconcile(
                     KafkaCluster.initContainerClusterRoleBindingName(namespace, name), desired);
 
             Future replacementFut = Future.future();
