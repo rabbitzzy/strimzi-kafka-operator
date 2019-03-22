@@ -132,7 +132,7 @@ public class ZookeeperLeaderFinder {
      * An exponential backoff is used if no ZK node is leader on the attempt to find it.
      * If there is no leader after 3 attempts then the returned Future completes with {@link #UNKNOWN_LEADER}.
      */
-    Future<Integer> findZookeeperLeader(String cluster, String namespace, List<Pod> pos, Secret coKeySecret) {
+    Future<Integer> findZookeeperLeader(String cluster, String namespace, List<Pod> pods, Secret coKeySecret) {
         if (pods.size() <= 1) {
             return Future.succeededFuture(pods.size() - 1);
         }
@@ -156,7 +156,7 @@ public class ZookeeperLeaderFinder {
         return new RuntimeException("Secret " + namespace + "/" + secretName + " does not exist");
     }
 
-    private Future<Integer> zookeeperLeader(String cluster, String namespace, List<Pod> pos,
+    private Future<Integer> zookeeperLeader(String cluster, String namespace, List<Pod> pods,
                                             NetClientOptions netClientOptions) {
         Future<Integer> result = Future.future();
         BackOff backOff = backOffSupplier.get();
@@ -208,12 +208,12 @@ public class ZookeeperLeaderFinder {
      * Synchronously find the leader by testing each pod in the given list
      * using {@link #isLeader(Pod, NetClientOptions)}.
      */
-    private Future<Integer> zookeeperLeader(List<Pod> ods, NetClientOptions netClientOptions) {
+    private Future<Integer> zookeeperLeader(List<Pod> pods, NetClientOptions netClientOptions) {
         try {
             Future<Integer> f = Future.succeededFuture(UNKNOWN_LEADER);
             for (int i = 0; i < pods.size(); i++) {
                 final int podNum = i;
-                Pod od = pods.get(i);
+                Pod pod = pods.get(i);
                 String podName = pod.getMetadata().getName();
                 f = f.compose(leader -> {
                     if (leader == UNKNOWN_LEADER) {
@@ -241,7 +241,7 @@ public class ZookeeperLeaderFinder {
     /**
      * Returns whether the given pod is the zookeeper leader.
      */
-    protected Future<Boolean> isLeader(Pod od, NetClientOptions netClientOptions) {
+    protected Future<Boolean> isLeader(Pod pod, NetClientOptions netClientOptions) {
 
         Future<Boolean> future = Future.future();
         String host = host(pod);
@@ -296,7 +296,7 @@ public class ZookeeperLeaderFinder {
     }
 
     /** The hostname for connecting to zookeeper in the given pod. */
-    protected String host(Pod od) {
+    protected String host(Pod pod) {
         String cluster = Labels.cluster(pod);
         String podName = pod.getMetadata().getName();
         int index = podName.lastIndexOf('-');

@@ -5,13 +5,9 @@
 package io.strimzi.operator.cluster.operator.resource;
 
 import io.fabric8.kubernetes.api.model.Pod;
-import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.apps.StatefulSet;
-import io.strimzi.operator.common.BackOff;
 import io.strimzi.operator.common.operator.resource.PodOperator;
-import io.strimzi.operator.common.operator.resource.SecretOperator;
 import io.vertx.core.Future;
-import io.vertx.core.Vertx;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.common.config.SslConfigs;
@@ -23,7 +19,6 @@ import java.util.List;
 import java.util.Properties;
 import java.util.function.Function;
 import java.util.function.Predicate;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 import static java.util.stream.IntStream.range;
@@ -157,6 +152,7 @@ public class Roller {
             @Override
             public Future<List<Integer>> apply(List<Integer> unsortedPodIds) {
                 return sort.apply(unsortedPodIds).compose(podIds -> {
+                    log.debug("Still to maybe roll: {}", podIds);
                     if (podIds.size() == 1) {
                         int podId = podIds.get(0);
                         String podName = ss.getMetadata().getName() + "-" + podId;
@@ -238,7 +234,7 @@ public class Roller {
             },
             leaderLastOrder(Roller::isController));
     }
-
+/*
     static Roller zookeeperRoller(PodOperator podOperations, Predicate<Pod> podRestart) {
         long pollingIntervalMs = 0;
         long operationTimeoutMs = 0;
@@ -263,4 +259,5 @@ public class Roller {
                         .map(leader -> leader == podId);
             }));
     }
+    */
 }
