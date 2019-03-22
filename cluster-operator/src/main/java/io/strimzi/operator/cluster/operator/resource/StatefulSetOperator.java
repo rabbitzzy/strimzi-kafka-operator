@@ -150,7 +150,7 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
      * @param podRestart The predicate for deciding whether to restart the pod.
      * @return a Future which completes when the given (possibly recreated) pod is ready.
      */
-    public Future<Void> maybeRestartPod(StatefulSet ss, String podName, Predicate<Pod> podRestart) {
+    Future<Void> maybeRestartPod(StatefulSet ss, String podName, Predicate<Pod> podRestart) {
         long pollingIntervalMs = 1_000;
         long timeoutMs = operationTimeoutMs;
         String namespace = ss.getMetadata().getNamespace();

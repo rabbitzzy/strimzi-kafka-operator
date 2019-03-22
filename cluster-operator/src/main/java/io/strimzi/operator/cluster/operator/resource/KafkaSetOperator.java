@@ -6,28 +6,18 @@ package io.strimzi.operator.cluster.operator.resource;
 
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.PersistentVolumeClaim;
-import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.apps.StatefulSet;
 import io.fabric8.kubernetes.api.model.apps.StatefulSetBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.strimzi.operator.cluster.model.AbstractModel;
 import io.strimzi.operator.cluster.model.KafkaCluster;
-import io.vertx.core.Future;
 import io.vertx.core.Vertx;
-import org.apache.kafka.clients.admin.AdminClient;
-import org.apache.kafka.clients.admin.AdminClientConfig;
-import org.apache.kafka.clients.admin.KafkaAdminClient;
-import org.apache.kafka.common.config.SslConfigs;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.Properties;
-import java.util.function.Predicate;
 import java.util.stream.Collectors;
-
-import static java.util.stream.IntStream.range;
 
 
 /**
@@ -137,61 +127,6 @@ public class KafkaSetOperator extends StatefulSetOperator {
         return super.revertStorageChanges(current, desired);
     }
 
-    @Override
-    public Future<Void> maybeRollingUpdate(StatefulSet ss, Predicate<Pod> podRestart) {
-        super.maybeRollingUpdate();
-
-        // Get list of all pods
-        // While collection not empty
-        // For each pod:
-        //   Does pod need restart?
-        //   Is size(collection) > 1 and pod "leader":
-        //     Add to end of queue
-        //   Else:
-        //     Precondition
-        //     Restart
-        //     Postcondition
-        Future<List<Integer>> fut = Future.succeededFuture(range(0, ss.getSpec().getReplicas()).boxed().collect(Collectors.toList()));
-        fut.compose(podIds -> {
-            int size = podIds.size();
-            if (size == 0) {
-                return Future.succeededFuture();
-            } else {
-                int podId = podIds.remove(0);
-                if (size == 1) {
-
-                } else {
-                    // Is it the leader?
-                    return isLeader(podId).compose(isLeader -> {
-                        if (isLeader) {
-                            // TODO add to tail of list
-                        } else {
-
-                        }
-                    });
-                }
-            }
-        });
-
-        return Future.succeededFuture(); // TODO
-    }
-
-    private Future<Boolean> isLeader(int podId) {
-        Future<Boolean> result = Future.future();
-        Properties p = new Properties();
-        p.setProperty(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, "");
-        p.setProperty(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, "");
-        p.setProperty(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG, "");
-        AdminClient ac = AdminClient.create(p);
-        ac.describeCluster().controller().whenComplete((n, e) -> {
-            if (e != null) {
-                result.fail(e);
-            } else {
-                result.complete(n.id() == podId);
-            }
-        });
-        return result;
-    }
 
 
 }
