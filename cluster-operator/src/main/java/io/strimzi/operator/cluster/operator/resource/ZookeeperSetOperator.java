@@ -8,7 +8,6 @@ import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.apps.StatefulSet;
 import io.fabric8.kubernetes.client.KubernetesClient;
-import io.strimzi.api.kafka.model.KafkaResources;
 import io.strimzi.operator.cluster.ClusterOperator;
 import io.strimzi.operator.common.model.Labels;
 import io.vertx.core.Future;
@@ -16,7 +15,6 @@ import io.vertx.core.Vertx;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.ArrayList;
 import java.util.function.Predicate;
 
 
@@ -79,6 +77,12 @@ public class ZookeeperSetOperator extends StatefulSetOperator {
     }
 
     public Future<Void> maybeRollingUpdate(StatefulSet ss, Predicate<Pod> podRestart, Secret coKeySecret) {
+        String cluster = ss.getMetadata().getLabels().get(Labels.STRIMZI_CLUSTER_LABEL);
+        return new ZookeeperRoller(operationTimeoutMs, podOperations, podRestart, leaderFinder, cluster, coKeySecret)
+                .maybeRollingUpdate(ss);
+/*
+
+
         String namespace = ss.getMetadata().getNamespace();
         String name = ss.getMetadata().getName();
         final int replicas = ss.getSpec().getReplicas();
@@ -128,6 +132,7 @@ public class ZookeeperSetOperator extends StatefulSetOperator {
             rollFuture = Future.succeededFuture();
         }
         return rollFuture;
+        */
     }
 
 }
