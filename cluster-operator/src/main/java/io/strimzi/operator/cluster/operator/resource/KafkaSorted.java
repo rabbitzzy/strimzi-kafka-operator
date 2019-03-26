@@ -6,8 +6,6 @@ package io.strimzi.operator.cluster.operator.resource;
 
 import io.vertx.core.CompositeFuture;
 import io.vertx.core.Future;
-import io.vertx.core.Handler;
-import io.vertx.core.Vertx;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.Config;
@@ -23,12 +21,10 @@ import org.apache.kafka.common.config.TopicConfig;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static java.lang.Integer.parseInt;
@@ -39,17 +35,24 @@ public class KafkaSorted {
     private final Future<Collection<TopicDescription>> descriptions;
 
     KafkaSorted(String bootstrapBroker) {
+        this(AdminClient.create(adminClientProperties(bootstrapBroker)));
+    }
+
+    private static Properties adminClientProperties(String bootstrapBroker) {
         // TODO TLS
         Properties p = new Properties();
         p.setProperty(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapBroker);
         p.setProperty(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, "");
         p.setProperty(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG, "");
-        ac = AdminClient.create(p);
+        return p;
+    }
 
+    KafkaSorted(AdminClient ac) {
+        this.ac = ac;
         // 1. Get all topic names
-        Future<Set<String>> topicNames = topicNames(ac);
+        Future<Set<String>> topicNames = topicNames();
         // 2. Get topic descriptions
-        descriptions = topicNames.compose(names -> describeTopics(ac, names));
+        descriptions = topicNames.compose(names -> describeTopics(names));
     }
 
 
@@ -66,7 +69,7 @@ public class KafkaSorted {
 
         // 4. Get topic configs (for those on $broker)
         Future<Map<String, Config>> configs = topicsOnBroker.map(td -> td.stream().map(t -> t.name()).collect(Collectors.toList()))
-                .compose(names -> topicConfigs(ac, names));
+                .compose(names -> topicConfigs(names));
 
         // 5. join
         return CompositeFuture.join(topicsOnBroker, configs).map(cf -> {
@@ -77,14 +80,14 @@ public class KafkaSorted {
                     Config config = nameToConfig.get(td.name());
                     ConfigEntry minIsrConfig = config.get(TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG);
                     int minIsr;
-                    if (minIsrConfig.value() != null) {
+                    if (minIsrConfig != null && minIsrConfig.value() != null) {
                         minIsr = parseInt(minIsrConfig.value());
                     } else {
                         minIsr = -1;
                     }
                     if (minIsr >= 0) {
                         for (TopicPartitionInfo pi : td.partitions()) {
-                            if (pi.isr().size() == minIsr) {
+                            if (pi.isr().size() <= minIsr) {
                                 for (Node b : pi.isr()) {
                                     if (b.id() == broker) {
                                         return false;
@@ -99,7 +102,7 @@ public class KafkaSorted {
     }
 
 
-    private Future<Map<String, Config>> topicConfigs(AdminClient ac, Collection<String> topicNames) {
+    private Future<Map<String, Config>> topicConfigs(Collection<String> topicNames) {
         List<ConfigResource> configs = topicNames.stream()
                 .map((String topicName) -> new ConfigResource(ConfigResource.Type.TOPIC, topicName))
                 .collect(Collectors.toList());
@@ -148,7 +151,7 @@ public class KafkaSorted {
         return byBroker;
     }
 
-    private Future<Collection<TopicDescription>> describeTopics(AdminClient ac, Set<String> names) {
+    private Future<Collection<TopicDescription>> describeTopics(Set<String> names) {
         Future<Collection<TopicDescription>> descFuture = Future.future();
         ac.describeTopics(names).all()
                 .whenComplete((tds, error) -> {
@@ -161,7 +164,7 @@ public class KafkaSorted {
         return descFuture;
     }
 
-    private Future<Set<String>> topicNames(AdminClient ac) {
+    private Future<Set<String>> topicNames() {
         Future<Set<String>> namesFuture = Future.future();
         ac.listTopics(new ListTopicsOptions().listInternal(true)).names()
                 .whenComplete((names, error) -> {

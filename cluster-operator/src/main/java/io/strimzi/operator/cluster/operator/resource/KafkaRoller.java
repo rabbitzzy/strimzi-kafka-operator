@@ -11,7 +11,6 @@ import io.strimzi.operator.common.operator.resource.PodOperator;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
-import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -58,14 +57,15 @@ class KafkaRoller extends Roller<Integer, ListContext<Integer>> {
                 }
                 return Future.succeededFuture(context);
             });*/
-            KafkaSorted ks = new KafkaSorted();
+            /*KafkaSorted ks = new KafkaSorted();
             return findRollableBroker(context.remainingPods(), ks::canRoll, 60_000, 3_600_000).compose(brokerId -> {
                 // TODO
-            });
+            });*/
+            return null;
         }
     }
 
-
+/*
     Future<Integer> leader(String bootstrapBroker) {
         // TODO retry
         // TODO TLS
@@ -80,7 +80,7 @@ class KafkaRoller extends Roller<Integer, ListContext<Integer>> {
         });
         return result;
     }
-
+*/
 
 
     ////////////////////////////////////////////
@@ -193,16 +193,17 @@ class KafkaRoller extends Roller<Integer, ListContext<Integer>> {
 
             @Override
             public void handle(Long event) {
-                findRollableBroker(brokers, rollable).compose(brokerId -> {
+                findRollableBroker(brokers, rollable).map(brokerId -> {
                     if (brokerId != -1) {
                         result.complete(brokerId);
                     } else {
                         if (System.currentTimeMillis() > deadline) {
                             result.complete(brokers.get(0));
                         } else {
-                            vertx.setTimer(pollMs, this);
+                            // TODO vertx.setTimer(pollMs, this);
                         }
                     }
+                    return null;
                 });
             }
         };
