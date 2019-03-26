@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static java.util.Arrays.asList;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -68,6 +69,15 @@ public class KafkaSortedTest {
                     return this;
                 }
                 TSB endPartition() {
+                    if (!asList(this.replicaOn).contains(this.leader)) {
+                        throw new RuntimeException("Leader must be one of the replicas");
+                    }
+                    if (!asList(this.replicaOn).containsAll(asList(this.isr))) {
+                        throw new RuntimeException("ISR must be a subset of the replicas");
+                    }
+                    if (asList(this.isr).contains(this.leader)) {
+                        throw new RuntimeException("ISR must not include the leader");
+                    }
                     return TSB.this;
                 }
             }

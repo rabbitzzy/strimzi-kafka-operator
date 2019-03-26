@@ -87,12 +87,11 @@ public class KafkaSorted {
                     }
                     if (minIsr >= 0) {
                         for (TopicPartitionInfo pi : td.partitions()) {
-                            if (pi.isr().size() <= minIsr) {
-                                for (Node b : pi.isr()) {
-                                    if (b.id() == broker) {
-                                        return false;
-                                    }
-                                }
+                            List<Node> isr = pi.isr();
+                            if (isr.size() < minIsr) {
+                                return !pi.replicas().stream().anyMatch(node -> node.id() == broker);
+                            } else if (isr.size() == minIsr) {
+                                return !isr.stream().anyMatch(node -> node.id() == broker);
                             }
                         }
                     }
