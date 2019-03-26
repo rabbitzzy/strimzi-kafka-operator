@@ -6,6 +6,8 @@ package io.strimzi.operator.cluster.operator.resource;
 
 import io.vertx.core.CompositeFuture;
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
+import io.vertx.core.Vertx;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.Config;
@@ -44,87 +46,19 @@ public class KafkaSorted {
         p.setProperty(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG, "");
         ac = AdminClient.create(p);
 
-                /*
-        1. Get all topic names
-        2. Get topic descriptions (in batches?)
-        3. Partition by broker Map<Broker, List<TopicDescription>>
-        4. For each broker:
-           5. Get topic configs (WITH CACHING?)
-           6. Filter all topics with minIsr > 1
-           7. Join with partitions on this broker
-           8. Will rolling this broker bring isr below min?
-              9. If not then it's an acceptable next broker (DONE)
-              10. Else consider next broker
-         5. wait try again (warn?)
-         */
-        Future<Integer> result = Future.future();
         // 1. Get all topic names
         Future<Set<String>> topicNames = topicNames(ac);
         // 2. Get topic descriptions
         descriptions = topicNames.compose(names -> describeTopics(ac, names));
     }
 
-    class Foo {
-        private final TopicDescription td;
-        int minIsr;
 
-        public Foo(Config config, TopicDescription td) {
-            ConfigEntry minIsr = config.get(TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG);
-            if (minIsr.value() != null) {
-                this.minIsr = parseInt(minIsr.value());
-            } else {
-                this.minIsr = -1;
-            }
-            this.td = td;
-        }
-
-        public boolean canRoll(int brokerId) {
-            if (minIsr >= 0) {
-                for (TopicPartitionInfo pi : td.partitions()) {
-                    if (pi.isr().size() == minIsr) {
-                        for (Node b : pi.isr()) {
-                            if (b.id() == brokerId) {
-                                return false;
-                            }
-                        }
-                    }
-                }
-            }
-            return true;
-        }
-    }
-
-    Future<Integer> findRollableBroker(Collection<Integer> brokers) {
-        Future<Integer> result = Future.future();
-        Future<Iterator<Integer>> f = Future.succeededFuture(brokers.iterator());
-        Function<Iterator<Integer>, Future<Iterator<Integer>>> fn = new Function<Iterator<Integer>, Future<Iterator<Integer>>>() {
-            @Override
-            public Future<Iterator<Integer>> apply(Iterator<Integer> iterator) {
-                if (iterator.hasNext()) {
-                    Integer brokerId = iterator.next();
-                    return KafkaSorted.this.canRollBroker(descriptions, brokerId).compose(canRoll -> {
-                        if (canRoll) {
-                            result.complete(brokerId);
-                            return Future.succeededFuture();
-                        }
-                        return Future.succeededFuture(iterator).compose(this);
-                    });
-                } else {
-                    result.complete(-1);
-                    return Future.succeededFuture();
-                }
-            }
-        };
-        f.compose(fn);
-        return result;
-    }
-
+    /**
+     * Determine whether the given broker can be rolled without affecting
+     * producers with acks=all publishing to topics with a {@code min.in.sync.replicas}.
+     */
     Future<Boolean> canRoll(int broker) {
-
-        // 3. Group topics by broker
         return canRollBroker(descriptions, broker);
-
-        // Get topic config for next broker
     }
 
     private Future<Boolean> canRollBroker(Future<Collection<TopicDescription>> descriptions, int broker) {

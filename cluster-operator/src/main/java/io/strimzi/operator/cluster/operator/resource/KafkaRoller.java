@@ -9,26 +9,15 @@ import io.fabric8.kubernetes.api.model.apps.StatefulSet;
 import io.strimzi.operator.cluster.operator.resource.Roller.ListContext;
 import io.strimzi.operator.common.operator.resource.PodOperator;
 import io.vertx.core.Future;
+import io.vertx.core.Handler;
+import io.vertx.core.Vertx;
 import org.apache.kafka.clients.admin.AdminClient;
-import org.apache.kafka.clients.admin.AdminClientConfig;
-import org.apache.kafka.clients.admin.Config;
-import org.apache.kafka.clients.admin.ListTopicsOptions;
-import org.apache.kafka.clients.admin.TopicDescription;
-import org.apache.kafka.common.Node;
-import org.apache.kafka.common.TopicPartitionInfo;
-import org.apache.kafka.common.config.ConfigResource;
-import org.apache.kafka.common.config.SslConfigs;
-import org.apache.kafka.common.config.TopicConfig;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
-import java.util.Properties;
-import java.util.Set;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -62,15 +51,20 @@ class KafkaRoller extends Roller<Integer, ListContext<Integer>> {
         } else {
             Integer podId = context.remainingPods().get(0);
             String hostname = "" + podId;
-            return leader(hostname).compose(leader -> {
+            /*return leader(hostname).compose(leader -> {
                 if (podId.equals(leader)) {
                     log.debug("Deferring possible roll of pod {}", podId);
                     context.addLast(context.next());
                 }
                 return Future.succeededFuture(context);
+            });*/
+            KafkaSorted ks = new KafkaSorted();
+            return findRollableBroker(context.remainingPods(), ks::canRoll, 60_000, 3_600_000).compose(brokerId -> {
+                // TODO
             });
         }
     }
+
 
     Future<Integer> leader(String bootstrapBroker) {
         // TODO retry
@@ -87,9 +81,18 @@ class KafkaRoller extends Roller<Integer, ListContext<Integer>> {
         return result;
     }
 
+
+
+    ////////////////////////////////////////////
+    /*
+
+
     Future<Integer> leader2(String bootstrapBroker) {
         // TODO retry
         // TODO TLS
+        /*
+        1. We nee
+         * /
         Future<Integer> result = Future.future();
         AdminClient ac = getAdminClient(bootstrapBroker);
         // Get all topic names
@@ -170,6 +173,66 @@ class KafkaRoller extends Roller<Integer, ListContext<Integer>> {
         p.setProperty(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, "");
         p.setProperty(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG, "");
         return AdminClient.create(p);
+    }
+    */
+    //////////////////////////////////////////
+
+    /**
+     * Find the first broker in the given {@code brokers} which is rollable
+     * according to XXX.
+     * TODO: If there are none then retry every P seconds.
+     * TODO: Wait up to T seconds before returning the first broker in the list.
+     * @param brokers
+     * @return
+     */
+    Future<Integer> findRollableBroker(List<Integer> brokers, Function<Integer, Future<Boolean>> rollable, long pollMs, long timeoutMs) {
+        Future<Integer> result = Future.future();
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        Vertx vertx = null;
+        Handler<Long> handler = new Handler<Long>() {
+
+            @Override
+            public void handle(Long event) {
+                findRollableBroker(brokers, rollable).compose(brokerId -> {
+                    if (brokerId != -1) {
+                        result.complete(brokerId);
+                    } else {
+                        if (System.currentTimeMillis() > deadline) {
+                            result.complete(brokers.get(0));
+                        } else {
+                            vertx.setTimer(pollMs, this);
+                        }
+                    }
+                });
+            }
+        };
+        handler.handle(null);
+        return result;
+    }
+
+    Future<Integer> findRollableBroker(List<Integer> brokers, Function<Integer, Future<Boolean>> rollable) {
+        Future<Integer> result = Future.future();
+        Future<Iterator<Integer>> f = Future.succeededFuture(brokers.iterator());
+        Function<Iterator<Integer>, Future<Iterator<Integer>>> fn = new Function<Iterator<Integer>, Future<Iterator<Integer>>>() {
+            @Override
+            public Future<Iterator<Integer>> apply(Iterator<Integer> iterator) {
+                if (iterator.hasNext()) {
+                    Integer brokerId = iterator.next();
+                    return rollable.apply(brokerId).compose(canRoll -> {
+                        if (canRoll) {
+                            result.complete(brokerId);
+                            return Future.succeededFuture();
+                        }
+                        return Future.succeededFuture(iterator).compose(this);
+                    });
+                } else {
+                    result.complete(-1);
+                    return Future.succeededFuture();
+                }
+            }
+        };
+        f.compose(fn);
+        return result;
     }
 
 
