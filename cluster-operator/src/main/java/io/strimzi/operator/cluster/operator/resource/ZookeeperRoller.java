@@ -8,7 +8,6 @@ import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.apps.StatefulSet;
 import io.strimzi.api.kafka.model.KafkaResources;
-import io.strimzi.operator.cluster.operator.resource.Roller.ListContext;
 import io.strimzi.operator.common.model.Labels;
 import io.strimzi.operator.common.operator.resource.PodOperator;
 import io.vertx.core.Future;
@@ -16,12 +15,38 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.function.Predicate;
 
-public class ZookeeperRoller extends Roller<Pod, ListContext<Pod>> {
+public class ZookeeperRoller extends Roller<Pod, ZookeeperRoller.ZkRollContext<Pod>> {
 
     private static final Logger log = LogManager.getLogger(ZookeeperRoller.class.getName());
+
+    public static class ZkRollContext<P> implements Roller.Context<P> {
+
+        private final List<P> pods;
+        private final List<P> allPods;
+
+        ZkRollContext(List<P> pods) {
+            this.allPods = Collections.unmodifiableList(new ArrayList<>(pods));
+            this.pods = new ArrayList<>(pods);
+        }
+
+        @Override
+        public P next() {
+            return pods.remove(0);
+        }
+
+        @Override
+        public boolean isEmpty() {
+            return pods.isEmpty();
+        }
+
+        public String toString() {
+            return pods.toString();
+        }
+    }
 
     private final ZookeeperLeaderFinder leaderFinder;
     private final Secret coKeySecret;
@@ -35,7 +60,7 @@ public class ZookeeperRoller extends Roller<Pod, ListContext<Pod>> {
     }
 
     @Override
-    Future<ListContext<Pod>> context(StatefulSet ss) {
+    Future<ZkRollContext<Pod>> context(StatefulSet ss) {
         List<Pod> pods = new ArrayList<>();
         String cluster = ss.getMetadata().getLabels().get(Labels.STRIMZI_CLUSTER_LABEL);
         // We don't really need to go getting all the pods here. ZLF doesn't need the whole pod, just it's name and a couple of other bits
@@ -44,22 +69,22 @@ public class ZookeeperRoller extends Roller<Pod, ListContext<Pod>> {
             Pod pod = podOperations.get(ss.getMetadata().getNamespace(), KafkaResources.zookeeperPodName(cluster, i));
             pods.add(pod);
         }
-        return Future.succeededFuture(new ListContext<>(pods));
+        return Future.succeededFuture(new ZkRollContext<>(pods));
     }
 
     @Override
-    Future<ListContext<Pod>> sort(ListContext<Pod> context) {
-        if (context.size() <= 1) {
+    Future<ZkRollContext<Pod>> sort(ZkRollContext<Pod> context) {
+        if (context.pods.size() <= 1) {
             return Future.succeededFuture(context);
         } else {
-            Pod nextPod = context.remainingPods().get(0);
+            Pod nextPod = context.pods.get(0);
             String name = nextPod.getMetadata().getName();
             int podId = Integer.parseInt(name.substring(name.lastIndexOf('-') + 1));
             String namespace = nextPod.getMetadata().getNamespace();
-            return leaderFinder.findZookeeperLeader(cluster, namespace, context.allPods(), coKeySecret)
+            return leaderFinder.findZookeeperLeader(cluster, namespace, context.allPods, coKeySecret)
                     .map(leader -> {
                         if (leader == podId) {
-                            context.addLast(context.next());
+                            context.pods.add(context.pods.remove(0));
                         }
                         return context;
                     });

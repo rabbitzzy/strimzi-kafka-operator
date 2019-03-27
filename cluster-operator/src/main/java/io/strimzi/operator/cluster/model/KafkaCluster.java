@@ -114,7 +114,7 @@ public class KafkaCluster extends AbstractModel {
     protected static final int CLIENT_PORT = 9092;
     protected static final String CLIENT_PORT_NAME = "clients";
 
-    protected static final int REPLICATION_PORT = 9091;
+    public static final int REPLICATION_PORT = 9091;
     protected static final String REPLICATION_PORT_NAME = "replication";
 
     protected static final int CLIENT_TLS_PORT = 9093;

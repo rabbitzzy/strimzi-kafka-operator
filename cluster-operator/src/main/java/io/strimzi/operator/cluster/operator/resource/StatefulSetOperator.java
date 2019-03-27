@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
+import java.util.regex.Pattern;
 
 /**
  * Operations for {@code StatefulSets}s, which supports {@link #maybeRollingUpdate(StatefulSet, Predicate)}
@@ -54,6 +55,10 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
      */
     public StatefulSetOperator(Vertx vertx, KubernetesClient client, long operationTimeoutMs) {
         this(vertx, client, operationTimeoutMs, new PodOperator(vertx, client), new PvcOperator(vertx, client));
+        client.pods().withName("").watchLog().getOutput();
+        CharSequence cs;
+        Pattern p;
+        p.matcher(cs);
     }
 
     public StatefulSetOperator(Vertx vertx, KubernetesClient client, long operationTimeoutMs, PodOperator podOperator, PvcOperator pvcOperator) {

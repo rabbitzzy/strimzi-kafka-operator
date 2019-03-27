@@ -7,7 +7,6 @@ package io.strimzi.operator.cluster.operator.resource;
 import io.vertx.core.CompositeFuture;
 import io.vertx.core.Future;
 import org.apache.kafka.clients.admin.AdminClient;
-import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.Config;
 import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.clients.admin.ListTopicsOptions;
@@ -15,15 +14,16 @@ import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartitionInfo;
 import org.apache.kafka.common.config.ConfigResource;
-import org.apache.kafka.common.config.SslConfigs;
 import org.apache.kafka.common.config.TopicConfig;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -31,21 +31,10 @@ import static java.lang.Integer.parseInt;
 
 public class KafkaSorted {
 
+    private static final Logger log = LogManager.getLogger(KafkaSorted.class.getName());
+
     private final AdminClient ac;
     private final Future<Collection<TopicDescription>> descriptions;
-
-    KafkaSorted(String bootstrapBroker) {
-        this(AdminClient.create(adminClientProperties(bootstrapBroker)));
-    }
-
-    private static Properties adminClientProperties(String bootstrapBroker) {
-        // TODO TLS
-        Properties p = new Properties();
-        p.setProperty(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapBroker);
-        p.setProperty(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, "");
-        p.setProperty(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG, "");
-        return p;
-    }
 
     KafkaSorted(AdminClient ac) {
         this.ac = ac;
@@ -65,52 +54,85 @@ public class KafkaSorted {
     }
 
     private Future<Boolean> canRollBroker(Future<Collection<TopicDescription>> descriptions, int broker) {
-        Future<List<TopicDescription>> topicsOnBroker = descriptions.map(tds -> groupTopicsByBroker(tds).get(broker));
+        Future<List<TopicDescription>> topicsOnBroker = descriptions
+                .map(tds -> groupTopicsByBroker(tds).getOrDefault(broker, Collections.emptyList()));
 
         // 4. Get topic configs (for those on $broker)
-        Future<Map<String, Config>> configs = topicsOnBroker.map(td -> td.stream().map(t -> t.name()).collect(Collectors.toList()))
-                .compose(names -> topicConfigs(names));
+        Future<Map<String, Config>> configs = topicsOnBroker
+                .compose(td -> topicConfigs(td.stream().map(t -> t.name()).collect(Collectors.toList())));
 
         // 5. join
         return CompositeFuture.join(topicsOnBroker, configs).map(cf -> {
             Collection<TopicDescription> tds = cf.resultAt(0);
             Map<String, Config> nameToConfig = cf.resultAt(1);
-            return tds.stream().anyMatch(
+            return tds.stream().noneMatch(
                 td -> {
-                    Config config = nameToConfig.get(td.name());
-                    ConfigEntry minIsrConfig = config.get(TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG);
-                    int minIsr;
-                    if (minIsrConfig != null && minIsrConfig.value() != null) {
-                        minIsr = parseInt(minIsrConfig.value());
-                    } else {
-                        minIsr = -1;
+                    if (wouldAffectAvailability(broker, nameToConfig, td)) {
+                        return true;
                     }
-                    if (minIsr >= 0) {
-                        for (TopicPartitionInfo pi : td.partitions()) {
-                            List<Node> isr = pi.isr();
-                            if (isr.size() < minIsr) {
-                                return !pi.replicas().stream().anyMatch(node -> node.id() == broker);
-                            } else if (isr.size() == minIsr) {
-                                return !isr.stream().anyMatch(node -> node.id() == broker);
-                            }
-                        }
-                    }
-                    return true;
+                    return false;
                 });
         });
     }
 
+    private boolean wouldAffectAvailability(int broker, Map<String, Config> nameToConfig, TopicDescription td) {
+        Config config = nameToConfig.get(td.name());
+        ConfigEntry minIsrConfig = config.get(TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG);
+        int minIsr;
+        if (minIsrConfig != null && minIsrConfig.value() != null) {
+            minIsr = parseInt(minIsrConfig.value());
+        } else {
+            minIsr = -1;
+        }
+
+        for (TopicPartitionInfo pi : td.partitions()) {
+//            if (pi.leader() == null
+//                || pi.leader().equals(Node.noNode())) {
+//                if (contains(pi.replicas(), broker)) {
+//                    log.debug("{}/{} has no leader and broker {} has a replica, so avoiding rolling",
+//                            td.name(), pi.partition(), broker);
+//                    return true;
+//                }
+//            } else {
+            List<Node> isr = pi.isr();
+            if (minIsr >= 0) {
+                if (isr.size() < minIsr) {
+                    if (contains(pi.replicas(), broker)) {
+                        log.debug("{}/{} is below its min ISR of {} and broker {} has a replica, " +
+                                        "so avoiding rolling",
+                                td.name(), pi.partition(), minIsr, broker);
+                        return true;
+                    }
+                } else if (isr.size() == minIsr) {
+                    if (contains(isr, broker)) {
+                        log.debug("rolling broker {} would put {}/{} below its min ISR of {}",
+                                broker, td.name(), pi.partition(), minIsr);
+                        return true;
+                    }
+                }
+            }
+//            }
+        }
+        return false;
+    }
+
+    private boolean contains(List<Node> isr, int broker) {
+        return isr.stream().anyMatch(node -> node.id() == broker);
+    }
 
     private Future<Map<String, Config>> topicConfigs(Collection<String> topicNames) {
         List<ConfigResource> configs = topicNames.stream()
                 .map((String topicName) -> new ConfigResource(ConfigResource.Type.TOPIC, topicName))
                 .collect(Collectors.toList());
         Future<Map<String, Config>> f = Future.future();
-        ac.describeConfigs(configs).all().whenComplete((x, error) -> {
+        ac.describeConfigs(configs).all().whenComplete((topicNameToConfig, error) -> {
             if (error != null) {
                 f.fail(error);
             } else {
-                f.complete(x.entrySet().stream().collect(Collectors.toMap(e -> e.getKey().name(), e -> e.getValue())));
+                f.complete(topicNameToConfig.entrySet().stream()
+                        .collect(Collectors.toMap(
+                            entry -> entry.getKey().name(),
+                            entry -> entry.getValue())));
             }
         });
         return f;

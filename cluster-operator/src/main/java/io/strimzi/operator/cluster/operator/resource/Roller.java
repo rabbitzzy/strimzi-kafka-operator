@@ -11,9 +11,6 @@ import io.vertx.core.Future;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import java.util.function.Function;
 import java.util.function.Predicate;
 
@@ -23,8 +20,8 @@ import java.util.function.Predicate;
  * The algorithm works as follows:
  * <pre>
  * 1. Get all pods to be rolled (by applying {@link #context(StatefulSet)}.
- * 2. While there are still pods to roll (i.e. {@link Context#size()} &gt; 1)
- *    1. {@linkplain #sort(Context) sort the collection} and get the first element
+ * 2. While there are still pods to roll (i.e. {@link Context#isEmpty()} ()} returns false)
+ *    1. {@linkplain #sort(Context) sort the context} and get the first element
  *    2. For this element:
  *      1. Does pod need restart?
  *        1. Is size(collection) &gt; 1 and pod "leader":
@@ -54,46 +51,13 @@ public abstract class Roller<P, C extends Roller.Context<P>> {
         this.podRestart = podRestart;
     }
 
-    interface Context<P> {
+    public interface Context<P> {
+        /** Get the next pod to be rolled */
         P next();
-        int size();
-    }
-
-    static class ListContext<P> implements Context<P> {
-
-        private final List<P> pods;
-        private final List<P> allPods;
-
-        ListContext(List<P> pods) {
-            this.allPods = Collections.unmodifiableList(new ArrayList<>(pods));
-            this.pods = new ArrayList<>(pods);
-        }
-
-        @Override
-        public P next() {
-            return pods.remove(0);
-        }
-
-        @Override
-        public int size() {
-            return pods.size();
-        }
-
-        public List<P> remainingPods() {
-            return Collections.unmodifiableList(pods);
-        }
-
-        public List<P> allPods() {
-            return allPods;
-        }
-
-        public void addLast(P pod) {
-            pods.add(pod);
-        }
-
-        public String toString() {
-            return pods.toString();
-        }
+        /** Are there more pods to be rolled? */
+        boolean isEmpty();
+        /** Used for logging */
+        String toString();
     }
 
     /**
@@ -142,21 +106,20 @@ public abstract class Roller<P, C extends Roller.Context<P>> {
         return context(ss).compose(new Function<C, Future<C>>() {
                 @Override
                 public Future<C> apply(C context) {
-                    Function<C, Future<C>> fn = pods -> {
-                        log.debug("Still to maybe roll: {}", pods);
-                        P pod = context.next();
-                        String podName = podName(ss, pod);
-                        Future<Void> f = maybeRestartPod(ss, podName);
-                        if (context.size() == 0) {
-                            return f.compose(i -> Future.succeededFuture());
-                        } else {
-                            return f.map(i -> pods).compose(this);
-                        }
-                    };
                     return sort(context).recover(error -> {
                         log.warn("Error when determining next pod to roll", error);
                         return Future.succeededFuture(context);
-                    }).compose(fn);
+                    }).compose(currentContext -> {
+                        log.debug("Still to maybe roll: {}", currentContext);
+                        P pod = context.next();
+                        String podName = podName(ss, pod);
+                        Future<Void> f = maybeRestartPod(ss, podName);
+                        if (context.isEmpty()) {
+                            return f.compose(i -> Future.succeededFuture());
+                        } else {
+                            return f.map(i -> currentContext).compose(this);
+                        }
+                    });
                 }
             }).map((Void) null);
     }

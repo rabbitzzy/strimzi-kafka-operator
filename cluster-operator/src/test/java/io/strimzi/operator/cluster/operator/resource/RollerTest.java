@@ -8,7 +8,6 @@ import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodBuilder;
 import io.fabric8.kubernetes.api.model.apps.StatefulSet;
 import io.fabric8.kubernetes.api.model.apps.StatefulSetBuilder;
-import io.strimzi.operator.cluster.operator.resource.Roller.ListContext;
 import io.strimzi.operator.common.operator.resource.PodOperator;
 import io.vertx.core.Future;
 import io.vertx.ext.unit.Async;
@@ -35,12 +34,35 @@ public class RollerTest {
 
     private static final Logger log = LogManager.getLogger(RollerTest.class.getName());
 
+    public static class ListContext<P> implements Roller.Context<P> {
+
+        private final List<P> pods;
+
+        ListContext(List<P> pods) {
+            this.pods = new ArrayList<>(pods);
+        }
+
+        @Override
+        public P next() {
+            return pods.remove(0);
+        }
+
+        @Override
+        public boolean isEmpty() {
+            return pods.isEmpty();
+        }
+
+        public String toString() {
+            return pods.toString();
+        }
+    }
+
     @Test
     public void testLeaderRolledLast(TestContext context) {
         Function<ListContext<Integer>, Future<ListContext<Integer>>> sort = listContext -> {
-            if (listContext.remainingPods().get(0).equals(3)) {
+            if (listContext.pods.get(0).equals(3)) {
                 log.debug("Pod 3 must be rolled last");
-                listContext.addLast(listContext.next());
+                listContext.pods.add(listContext.next());
             }
             return Future.succeededFuture(listContext);
         };
@@ -60,9 +82,9 @@ public class RollerTest {
             @Override
             public Future<ListContext<Integer>> apply(ListContext<Integer> listContext) {
                 int leader = !changedLeader ? 1 : 3;
-                if (listContext.remainingPods().get(0).equals(leader)) {
+                if (listContext.pods.get(0).equals(leader)) {
                     log.debug("Pod {} must be rolled last", leader);
-                    listContext.addLast(listContext.next());
+                    listContext.pods.add(listContext.next());
                     changedLeader = true;
                 }
                 return Future.succeededFuture(listContext);

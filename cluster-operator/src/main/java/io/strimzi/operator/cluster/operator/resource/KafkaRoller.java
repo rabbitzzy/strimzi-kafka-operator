@@ -6,23 +6,29 @@ package io.strimzi.operator.cluster.operator.resource;
 
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.apps.StatefulSet;
-import io.strimzi.operator.cluster.operator.resource.Roller.ListContext;
+import io.strimzi.operator.cluster.model.KafkaCluster;
+import io.strimzi.operator.common.model.Labels;
 import io.strimzi.operator.common.operator.resource.PodOperator;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.common.config.SslConfigs;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Properties;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import static java.util.stream.IntStream.range;
 
-class KafkaRoller extends Roller<Integer, ListContext<Integer>> {
+class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
 
     private static final Logger log = LogManager.getLogger(KafkaRoller.class.getName());
 
@@ -37,40 +43,73 @@ class KafkaRoller extends Roller<Integer, ListContext<Integer>> {
         this.operationTimeoutMs = operationTimeoutMs;
     }
 
-    @Override
-    Future<ListContext<Integer>> context(StatefulSet ss) {
-        List<Integer> collect = range(0, ss.getSpec().getReplicas()).boxed().collect(Collectors.toList());
-        return Future.succeededFuture(new ListContext<>(collect));
-    }
+    public static class KafkaRollContext implements Roller.Context<Integer> {
 
-    @Override
-    Future<ListContext<Integer>> sort(ListContext<Integer> context) {
-        if (context.size() <= 1) {
-            return Future.succeededFuture(context);
-        } else {
-            Integer podId = context.remainingPods().get(0);
-            String hostname = "" + podId;
-            /*return leader(hostname).compose(leader -> {
-                if (podId.equals(leader)) {
-                    log.debug("Deferring possible roll of pod {}", podId);
-                    context.addLast(context.next());
-                }
-                return Future.succeededFuture(context);
-            });*/
-            /*KafkaSorted ks = new KafkaSorted();
-            return findRollableBroker(context.remainingPods(), ks::canRoll, 60_000, 3_600_000).compose(brokerId -> {
-                // TODO
-            });*/
-            return null;
+        private final List<Integer> pods;
+        private final String namespace;
+        private final String cluster;
+
+        public KafkaRollContext(String namespace, String cluster, List<Integer> pods) {
+            this.namespace = namespace;
+            this.cluster = cluster;
+            this.pods = pods;
+        }
+
+        @Override
+        public Integer next() {
+            return pods.remove(0);
+        }
+
+        @Override
+        public boolean isEmpty() {
+            return pods.isEmpty();
         }
     }
 
-/*
-    Future<Integer> leader(String bootstrapBroker) {
-        // TODO retry
+    @Override
+    Future<KafkaRollContext> context(StatefulSet ss) {
+        return Future.succeededFuture(new KafkaRollContext(
+                ss.getMetadata().getNamespace(),
+                Labels.cluster(ss),
+                range(0, ss.getSpec().getReplicas()).boxed().collect(Collectors.toList())));
+    }
+
+    @Override
+    Future<KafkaRollContext> sort(KafkaRollContext context) {
+        if (context.pods.size() <= 1) {
+            // If there's a single pod left it's the controller so we need to rol it anyway
+            // TODO but we might need to wait for it to be available to roll according to can roll
+            // TODO think about retry here and in the branch below
+            return Future.succeededFuture(context);
+        } else {
+            Integer podId = context.pods.get(0);
+            String hostname = KafkaCluster.podDnsName(context.namespace, context.cluster, podId) + ":" + KafkaCluster.REPLICATION_PORT;
+            AdminClient ac = AdminClient.create(adminClientProperties(hostname));
+            return controller(ac).compose(controller -> {
+                ArrayList<Integer> podsToRollExcludingController = new ArrayList<>(context.pods);
+                podsToRollExcludingController.remove(controller);
+                KafkaSorted ks = new KafkaSorted(ac);
+                return findRollableBroker(podsToRollExcludingController, ks::canRoll, 60_000, 3_600_000).map(brokerId -> {
+                    int index = context.pods.indexOf(brokerId);
+                    context.pods.add(0, context.pods.remove(index));
+                    return context;
+                });
+            });
+        }
+    }
+
+    private static Properties adminClientProperties(String bootstrapBroker) {
         // TODO TLS
+        Properties p = new Properties();
+        p.setProperty(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapBroker);
+        p.setProperty(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, "");
+        p.setProperty(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG, "");
+        return p;
+    }
+
+
+    Future<Integer> controller(AdminClient ac) {
         Future<Integer> result = Future.future();
-        AdminClient ac = getAdminClient(bootstrapBroker);
         ac.describeCluster().controller().whenComplete((controllerNode, exception) -> {
             if (exception != null) {
                 result.fail(exception);
@@ -80,8 +119,6 @@ class KafkaRoller extends Roller<Integer, ListContext<Integer>> {
         });
         return result;
     }
-*/
-
 
     ////////////////////////////////////////////
     /*

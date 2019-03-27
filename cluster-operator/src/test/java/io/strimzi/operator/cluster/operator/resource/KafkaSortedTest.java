@@ -30,8 +30,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
-import static java.util.Arrays.asList;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -44,39 +44,41 @@ public class KafkaSortedTest {
         class TSB {
             class PSB {
                 private final Integer id;
-                private int[] isr;
-                private int leader;
-                private int[] replicaOn;
+                private int[] isr = new int[0];
+                private Integer leader;
+                private int[] replicaOn = new int[0];
 
                 public PSB(Integer p) {
                     this.id = p;
                 }
                 PSB replicaOn(int... broker) {
-                    broker(broker);
+                    addBroker(broker);
                     this.replicaOn = broker;
                     return this;
                 }
 
                 PSB leader(int broker) {
-                    broker(broker);
+                    addBroker(broker);
                     this.leader = broker;
                     return this;
                 }
 
                 PSB isr(int... broker) {
-                    broker(broker);
+                    addBroker(broker);
                     this.isr = broker;
                     return this;
                 }
                 TSB endPartition() {
-                    if (!asList(this.replicaOn).contains(this.leader)) {
-                        throw new RuntimeException("Leader must be one of the replicas");
+                    if (this.leader != null) {
+                        if (!IntStream.of(this.replicaOn).anyMatch(x -> x == this.leader)) {
+                            throw new RuntimeException("Leader must be one of the replicas");
+                        }
+                        if (IntStream.of(this.isr).anyMatch(x -> x == this.leader)) {
+                            throw new RuntimeException("ISR must not include the leader");
+                        }
                     }
-                    if (!asList(this.replicaOn).containsAll(asList(this.isr))) {
+                    if (!IntStream.of(this.isr).allMatch(x -> IntStream.of(this.replicaOn).anyMatch(y -> x == y))) {
                         throw new RuntimeException("ISR must be a subset of the replicas");
-                    }
-                    if (asList(this.isr).contains(this.leader)) {
-                        throw new RuntimeException("ISR must not include the leader");
                     }
                     return TSB.this;
                 }
@@ -129,10 +131,11 @@ public class KafkaSortedTest {
             return topics.computeIfAbsent(name, n -> new TSB(n, internal));
         }
 
-        void broker(int... ids) {
+        KSB addBroker(int... ids) {
             for (int id : ids) {
                 brokers.computeIfAbsent(id, i -> new BSB(i));
             }
+            return this;
         }
 
         ListTopicsResult ltr() {
@@ -150,7 +153,7 @@ public class KafkaSortedTest {
                             tsb.partitions.entrySet().stream().map(e1 -> {
                                 TSB.PSB psb = e1.getValue();
                                 return new TopicPartitionInfo(psb.id,
-                                        node(psb.leader),
+                                        psb.leader != null ? node(psb.leader) : Node.noNode(),
                                         Arrays.stream(psb.replicaOn).boxed().map(broker -> node(broker)).collect(Collectors.toList()),
                                         Arrays.stream(psb.isr).boxed().map(broker -> node(broker)).collect(Collectors.toList()));
                             }).collect(Collectors.toList()));
@@ -197,17 +200,13 @@ public class KafkaSortedTest {
     }
 
     @Test
-    public void test(TestContext context) {
-        // A minisr = 2
-        // B minisr = 2
-        // Broker 0, leader: A/0, isr: B/0, CONTROLLER
-        // Broker 1, leader: B/0, isr: A/0
+    public void belowMinIsr(TestContext context) {
         KSB ksb = new KSB().topic("A", false)
                 .addToConfig(TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG, "2")
                 .partition(0)
                     .replicaOn(0, 1)
                     .leader(0)
-                    .isr(0, 1)
+                    .isr(1)
                 .endPartition()
 
                 .endTopic()
@@ -216,28 +215,199 @@ public class KafkaSortedTest {
                 .partition(0)
                     .replicaOn(0, 1)
                     .leader(1)
-                    .isr(0)
+                    .isr()
                 .endPartition()
+                .endTopic()
 
-                .endTopic();
+                .addBroker(3);
 
         KafkaSorted kafkaSorted = new KafkaSorted(ksb.ac());
 
-        for (int i = 0; i <= 1; i++) {
-            int brokerId = i;
+        for (Integer brokerId : ksb.brokers.keySet()) {
             Async async = context.async();
 
             kafkaSorted.canRoll(brokerId).setHandler(ar -> {
                 if (ar.failed()) {
                     context.fail(ar.cause());
                 } else {
-                    context.assertFalse(ar.result(),
-                            "broker " + brokerId + " should not be rollable, being minisr = 2 and it's only replicated on two brokers");
+                    if (brokerId == 3) {
+                        context.assertTrue(ar.result(),
+                                "broker " + brokerId + " should be rollable, having no partitions");
+                    } else {
+                        context.assertFalse(ar.result(),
+                                "broker " + brokerId + " should not be rollable, being minisr = 2 and it's only replicated on two brokers");
+                    }
                 }
                 async.complete();
             });
         }
     }
+
+    @Test
+    public void atMinIsr(TestContext context) {
+        KSB ksb = new KSB().topic("A", false)
+                .addToConfig(TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG, "1")
+                .partition(0)
+                .replicaOn(0, 1)
+                .leader(0)
+                .isr(1)
+                .endPartition()
+
+                .endTopic()
+                .topic("B", false)
+                .addToConfig(TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG, "1")
+                .partition(0)
+                .replicaOn(0, 1)
+                .leader(1)
+                .isr(0)
+                .endPartition()
+
+                .endTopic()
+
+                .addBroker(2);
+
+        KafkaSorted kafkaSorted = new KafkaSorted(ksb.ac());
+
+        for (Integer brokerId : ksb.brokers.keySet()) {
+            Async async = context.async();
+
+            kafkaSorted.canRoll(brokerId).setHandler(ar -> {
+                if (ar.failed()) {
+                    context.fail(ar.cause());
+                } else {
+                    if (brokerId == 2) {
+                        context.assertTrue(ar.result(),
+                                "broker " + brokerId + " should be rollable, having no partitions");
+                    } else {
+                        context.assertFalse(ar.result(),
+                                "broker " + brokerId + " should not be rollable, being minisr = 2 and it's only replicated on two brokers");
+                    }
+                }
+                async.complete();
+            });
+        }
+    }
+
+    @Test
+    public void aboveMinIsr(TestContext context) {
+        KSB ksb = new KSB().topic("A", false)
+                .addToConfig(TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG, "1")
+                .partition(0)
+                    .replicaOn(0, 1, 2)
+                    .leader(0)
+                    .isr(1, 2)
+                .endPartition()
+
+                .endTopic()
+                .topic("B", false)
+                .addToConfig(TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG, "1")
+                .partition(0)
+                    .replicaOn(0, 1, 2)
+                    .leader(1)
+                    .isr(0, 2)
+                .endPartition()
+                .endTopic()
+
+                .addBroker(3);
+
+        KafkaSorted kafkaSorted = new KafkaSorted(ksb.ac());
+
+        for (Integer brokerId : ksb.brokers.keySet()) {
+            Async async = context.async();
+
+            kafkaSorted.canRoll(brokerId).setHandler(ar -> {
+                if (ar.failed()) {
+                    context.fail(ar.cause());
+                } else {
+                    context.assertTrue(ar.result(),
+                            "broker " + brokerId + " should be rollable, being minisr = 1 and having two brokers in its isr");
+                }
+                async.complete();
+            });
+        }
+    }
+
+//    @Test
+//    public void noLeader(TestContext context) {
+//        KSB ksb = new KSB().topic("A", false)
+//                .addToConfig(TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG, "1")
+//                .partition(0)
+//                .replicaOn(0, 1, 2)
+//                //.leader(0)
+//                .isr(1, 2)
+//                .endPartition()
+//
+//                .endTopic()
+//                .topic("B", false)
+//                .addToConfig(TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG, "1")
+//                .partition(0)
+//                .replicaOn(0, 1, 2)
+//                //.leader(1)
+//                .isr(0, 2)
+//                .endPartition()
+//                .endTopic()
+//
+//                .addBroker(3);
+//
+//        KafkaSorted kafkaSorted = new KafkaSorted(ksb.ac());
+//
+//        for (Integer brokerId : ksb.brokers.keySet()) {
+//            Async async = context.async();
+//
+//            kafkaSorted.canRoll(brokerId).setHandler(ar -> {
+//                if (ar.failed()) {
+//                    context.fail(ar.cause());
+//                } else {
+//                    context.assertTrue(ar.result(),
+//                            "broker " + brokerId + " should be rollable, being minisr = 1 and having two brokers in its isr");
+//                }
+//                async.complete();
+//            });
+//        }
+//    }
+
+    @Test
+    public void noMinIsr(TestContext context) {
+        KSB ksb = new KSB().topic("A", false)
+
+                .partition(0)
+                .replicaOn(0, 1, 2)
+                .leader(0)
+                .isr(1, 2)
+                .endPartition()
+
+                .endTopic()
+                .topic("B", false)
+
+                .partition(0)
+                .replicaOn(0, 1, 2)
+                .leader(1)
+                .isr(0, 2)
+                .endPartition()
+                .endTopic()
+
+                .addBroker(3);
+
+        KafkaSorted kafkaSorted = new KafkaSorted(ksb.ac());
+
+        for (Integer brokerId : ksb.brokers.keySet()) {
+            Async async = context.async();
+
+            kafkaSorted.canRoll(brokerId).setHandler(ar -> {
+                if (ar.failed()) {
+                    context.fail(ar.cause());
+                } else {
+                    context.assertTrue(ar.result(),
+                            "broker " + brokerId + " should be rollable, being minisr = 1 and having two brokers in its isr");
+                }
+                async.complete();
+            });
+        }
+    }
+
+    // TODO Test with no min.in.sync.replicas config
+    // TODO when AC throws various exceptions (e.g. UnknownTopicOrPartitionException)
+
 /*
     public static void main(String[] args) throws ExecutionException, InterruptedException {
         Properties p = new Properties();
