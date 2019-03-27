@@ -463,7 +463,7 @@ public class ResourceUtils {
     }
 
     public static ZookeeperLeaderFinder zookeeperLeaderFinder(Vertx vertx, KubernetesClient client) {
-        return new ZookeeperLeaderFinder(vertx, new SecretOperator(vertx, client),
+        return new ZookeeperLeaderFinder(vertx,
             () -> new BackOff(5_000, 2, 4)) {
             @Override
             protected Future<Boolean> isLeader(Pod pod, NetClientOptions options) {

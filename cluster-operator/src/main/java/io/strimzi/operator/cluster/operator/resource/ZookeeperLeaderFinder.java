@@ -6,13 +6,11 @@ package io.strimzi.operator.cluster.operator.resource;
 
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.Secret;
-import io.strimzi.api.kafka.model.KafkaResources;
 import io.strimzi.certs.CertAndKey;
 import io.strimzi.operator.cluster.model.Ca;
 import io.strimzi.operator.cluster.model.ZookeeperCluster;
 import io.strimzi.operator.common.BackOff;
 import io.strimzi.operator.common.model.Labels;
-import io.strimzi.operator.common.operator.resource.SecretOperator;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
@@ -48,12 +46,10 @@ public class ZookeeperLeaderFinder {
     public static final int UNKNOWN_LEADER = -1;
 
     private final Vertx vertx;
-    final SecretOperator secretOperator;
     private final Supplier<BackOff> backOffSupplier;
 
-    public ZookeeperLeaderFinder(Vertx vertx, SecretOperator secretOperator, Supplier<BackOff> backOffSupplier) {
+    public ZookeeperLeaderFinder(Vertx vertx, Supplier<BackOff> backOffSupplier) {
         this.vertx = vertx;
-        this.secretOperator = secretOperator;
         this.backOffSupplier = backOffSupplier;
     }
 
@@ -132,27 +128,19 @@ public class ZookeeperLeaderFinder {
      * An exponential backoff is used if no ZK node is leader on the attempt to find it.
      * If there is no leader after 3 attempts then the returned Future completes with {@link #UNKNOWN_LEADER}.
      */
-    Future<Integer> findZookeeperLeader(String cluster, String namespace, List<Pod> pods, Secret coKeySecret) {
+    Future<Integer> findZookeeperLeader(String cluster, String namespace, List<Pod> pods, Secret clusterCaCertificateSecret, Secret coKeySecret) {
         if (pods.size() <= 1) {
             return Future.succeededFuture(pods.size() - 1);
         }
-        String clusterCaSecretName = KafkaResources.clusterCaCertificateSecretName(cluster);
-        Future<Secret> clusterCaKeySecretFuture = secretOperator.getAsync(namespace, clusterCaSecretName);
-        return clusterCaKeySecretFuture.compose(clusterCaCertificateSecret -> {
-            if (clusterCaCertificateSecret  == null) {
-                return Future.failedFuture(missingSecretFuture(namespace, clusterCaSecretName));
-            }
-            try {
-                NetClientOptions netClientOptions = clientOptions(coKeySecret, clusterCaCertificateSecret);
-                return zookeeperLeader(cluster, namespace, pods, netClientOptions);
-            } catch (Throwable e) {
-                return Future.failedFuture(e);
-            }
-        });
-
+        try {
+            NetClientOptions netClientOptions = clientOptions(coKeySecret, clusterCaCertificateSecret);
+            return zookeeperLeader(cluster, namespace, pods, netClientOptions);
+        } catch (Throwable e) {
+            return Future.failedFuture(e);
+        }
     }
 
-    private RuntimeException missingSecretFuture(String namespace, String secretName) {
+    static RuntimeException missingSecretFuture(String namespace, String secretName) {
         return new RuntimeException("Secret " + namespace + "/" + secretName + " does not exist");
     }
 

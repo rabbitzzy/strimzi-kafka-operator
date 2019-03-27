@@ -50,12 +50,14 @@ public class ZookeeperRoller extends Roller<Pod, ZookeeperRoller.ZkRollContext<P
 
     private final ZookeeperLeaderFinder leaderFinder;
     private final Secret coKeySecret;
+    private final Secret clusterCaSecret;
     private final String cluster;
 
-    public ZookeeperRoller(long operationTimeoutMs, PodOperator podOperations, Predicate<Pod> podRestart, ZookeeperLeaderFinder leaderFinder, String cluster, Secret coKeySecret) {
+    public ZookeeperRoller(long operationTimeoutMs, PodOperator podOperations, Predicate<Pod> podRestart, ZookeeperLeaderFinder leaderFinder, String cluster, Secret clusterCaSecret, Secret coKeySecret) {
         super(operationTimeoutMs, podOperations, podRestart);
         this.leaderFinder = leaderFinder;
         this.coKeySecret = coKeySecret;
+        this.clusterCaSecret = clusterCaSecret;
         this.cluster = cluster;
     }
 
@@ -81,13 +83,16 @@ public class ZookeeperRoller extends Roller<Pod, ZookeeperRoller.ZkRollContext<P
             String name = nextPod.getMetadata().getName();
             int podId = Integer.parseInt(name.substring(name.lastIndexOf('-') + 1));
             String namespace = nextPod.getMetadata().getNamespace();
-            return leaderFinder.findZookeeperLeader(cluster, namespace, context.allPods, coKeySecret)
+            return leaderFinder.findZookeeperLeader(cluster, namespace, context.allPods, clusterCaSecret, coKeySecret)
                     .map(leader -> {
                         if (leader == podId) {
                             context.pods.add(context.pods.remove(0));
                         }
                         return context;
                     });
+
+
+
         }
     }
 

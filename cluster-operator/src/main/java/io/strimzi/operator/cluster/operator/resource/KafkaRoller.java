@@ -5,8 +5,11 @@
 package io.strimzi.operator.cluster.operator.resource;
 
 import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.apps.StatefulSet;
+import io.strimzi.operator.cluster.model.Ca;
 import io.strimzi.operator.cluster.model.KafkaCluster;
+import io.strimzi.operator.common.PasswordGenerator;
 import io.strimzi.operator.common.model.Labels;
 import io.strimzi.operator.common.operator.resource.PodOperator;
 import io.vertx.core.Future;
@@ -18,12 +21,30 @@ import org.apache.kafka.common.config.SslConfigs;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.BufferedOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
+import java.security.cert.Certificate;
+import java.security.cert.CertificateException;
+import java.security.cert.X509Certificate;
+import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Properties;
 import java.util.function.Function;
 import java.util.function.Predicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import static java.util.stream.IntStream.range;
@@ -35,12 +56,18 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
     private final PodOperator podOperations;
     private final long pollingIntervalMs;
     private final long operationTimeoutMs;
+    private final Secret clusterCaCertSecret;
+    private final Secret coKeySecret;
 
-    public KafkaRoller(PodOperator podOperations, Predicate<Pod> podRestart, long pollingIntervalMs, long operationTimeoutMs) {
+    public KafkaRoller(PodOperator podOperations, Predicate<Pod> podRestart,
+                       long pollingIntervalMs, long operationTimeoutMs,
+                       Secret clusterCaCertSecret, Secret coKeySecret) {
         super(0, podOperations, podRestart);
         this.podOperations = podOperations;
         this.pollingIntervalMs = pollingIntervalMs;
         this.operationTimeoutMs = operationTimeoutMs;
+        this.clusterCaCertSecret = clusterCaCertSecret;
+        this.coKeySecret = coKeySecret;
     }
 
     public static class KafkaRollContext implements Roller.Context<Integer> {
@@ -84,27 +111,120 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
         } else {
             Integer podId = context.pods.get(0);
             String hostname = KafkaCluster.podDnsName(context.namespace, context.cluster, podId) + ":" + KafkaCluster.REPLICATION_PORT;
-            AdminClient ac = AdminClient.create(adminClientProperties(hostname));
-            return controller(ac).compose(controller -> {
-                ArrayList<Integer> podsToRollExcludingController = new ArrayList<>(context.pods);
-                podsToRollExcludingController.remove(controller);
-                KafkaSorted ks = new KafkaSorted(ac);
-                return findRollableBroker(podsToRollExcludingController, ks::canRoll, 60_000, 3_600_000).map(brokerId -> {
-                    int index = context.pods.indexOf(brokerId);
-                    context.pods.add(0, context.pods.remove(index));
-                    return context;
+            return adminClient(hostname).compose(ac -> {
+                Future<KafkaRollContext> f = Future.future();
+                return controller(ac).compose(controller -> {
+                    ArrayList<Integer> podsToRollExcludingController = new ArrayList<>(context.pods);
+                    podsToRollExcludingController.remove(controller);
+                    KafkaSorted ks = new KafkaSorted(ac);
+                    return findRollableBroker(podsToRollExcludingController, ks::canRoll, 60_000, 3_600_000).map(brokerId -> {
+                        int index = context.pods.indexOf(brokerId);
+                        context.pods.add(0, context.pods.remove(index));
+                        return context;
+                    });
+                }).map(r -> {
+                    ac.close();
+                    return r;
+                }).recover(e -> {
+                    ac.close();
+                    return Future.failedFuture(e);
                 });
             });
         }
     }
 
-    private static Properties adminClientProperties(String bootstrapBroker) {
+    private Future<AdminClient> adminClient(String bootstrapBroker) {
         // TODO TLS
-        Properties p = new Properties();
-        p.setProperty(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapBroker);
-        p.setProperty(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, "");
-        p.setProperty(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG, "");
-        return p;
+        Vertx vertx = null;
+        Future<AdminClient> result = Future.future();
+        vertx.executeBlocking(f -> {
+            try {
+                PasswordGenerator pg = new PasswordGenerator(12);
+                AdminClient ac;
+                String trustStorePassword = pg.generate();
+                File truststoreFile = setupTrustStore(trustStorePassword.toCharArray(), Ca.cert(clusterCaCertSecret, Ca.CA_CRT));
+                try {
+                    String keyStorePassword = pg.generate();
+                    File keystoreFile = setupKeyStore(coKeySecret,
+                            keyStorePassword.toCharArray(),
+                            Ca.cert(coKeySecret, "cluster-operator.crt"));
+                    try {
+                        Properties p = new Properties();
+                        p.setProperty(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapBroker);
+                        p.setProperty(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, truststoreFile.getAbsolutePath());
+                        p.setProperty(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG, trustStorePassword);
+                        p.setProperty(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG, keystoreFile.getAbsolutePath());
+                        p.setProperty(SslConfigs.SSL_KEYSTORE_PASSWORD_CONFIG, keyStorePassword);
+                        ac = AdminClient.create(p);
+                    } finally {
+                        keystoreFile.delete();
+                    }
+                } finally {
+                    truststoreFile.delete();
+                }
+                f.complete(ac);
+            } catch (Exception e) {
+                f.fail(e);
+            }
+        },
+            result.completer());
+        return result;
+    }
+
+    private File setupKeyStore(Secret clusterSecretKey, char[] password,
+                                   X509Certificate clientCert) {
+        Base64.Decoder decoder = Base64.getDecoder();
+
+        try {
+            KeyStore keyStore = KeyStore.getInstance("PKCS12");
+            keyStore.load(null, password);
+            Pattern parse = Pattern.compile("^---*BEGIN.*---*$(.*)^---*END.*---*$.*", Pattern.MULTILINE | Pattern.DOTALL);
+
+            String keyText = new String(decoder.decode(clusterSecretKey.getData().get("cluster-operator.crt")), StandardCharsets.ISO_8859_1);
+            Matcher matcher = parse.matcher(keyText);
+            if (!matcher.find()) {
+                throw new RuntimeException("Bad client (CO) key. Key misses BEGIN or END markers");
+            }
+            PrivateKey clientKey = KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(
+                    Base64.getMimeDecoder().decode(matcher.group(1))));
+
+            keyStore.setEntry("tls-probe",
+                    new KeyStore.PrivateKeyEntry(clientKey, new Certificate[]{clientCert}),
+                    new KeyStore.PasswordProtection(password));
+
+            return store(password, keyStore);
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private File setupTrustStore(char[] password, X509Certificate caCertCO) {
+
+        try {
+            KeyStore trustStore = null;
+            trustStore = KeyStore.getInstance("PKCS12");
+            trustStore.load(null, password);
+
+            trustStore.setEntry(caCertCO.getSubjectDN().getName(), new KeyStore.TrustedCertificateEntry(caCertCO), null);
+            return store(password, trustStore);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private File store(char[] password, KeyStore trustStore) throws IOException, KeyStoreException, NoSuchAlgorithmException, CertificateException {
+        File f = File.createTempFile(getClass().getName(), "ts");
+        try {
+            f.deleteOnExit();
+            try (OutputStream os = new BufferedOutputStream(new FileOutputStream(f))) {
+                trustStore.store(os, password);
+            }
+            return f;
+        } catch (Exception e) {
+            f.delete();
+            throw e;
+        }
     }
 
 

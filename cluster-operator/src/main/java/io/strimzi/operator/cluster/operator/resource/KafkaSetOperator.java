@@ -7,6 +7,7 @@ package io.strimzi.operator.cluster.operator.resource;
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.PersistentVolumeClaim;
 import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.apps.StatefulSet;
 import io.fabric8.kubernetes.api.model.apps.StatefulSetBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -131,17 +132,9 @@ public class KafkaSetOperator extends StatefulSetOperator {
     }
 
     @Override
-    public Future<Void> maybeRollingUpdate(StatefulSet ss, Predicate<Pod> podRestart) {
-        String namespace = ss.getMetadata().getNamespace();
-        String name = ss.getMetadata().getName();
-        final int replicas = ss.getSpec().getReplicas();
-        log.debug("Considering rolling update of {}/{}", namespace, name);
-        Future<Void> f = Future.succeededFuture();
-        for (int i = 0; i < replicas; i++) {
-            String podName = name + "-" + i;
-            f = f.compose(ignored -> maybeRestartPod(ss, podName, podRestart));
-        }
-        return f;
+    public Future<Void> maybeRollingUpdate(StatefulSet ss, Predicate<Pod> podRestart, Secret clusterCaCertSecret, Secret coKeySecret) {
+        return new KafkaRoller(podOperations, podRestart, 1_000, operationTimeoutMs,
+                clusterCaCertSecret, coKeySecret).maybeRollingUpdate(ss);
     }
 
 

@@ -14,6 +14,7 @@ import io.strimzi.api.kafka.model.DoneableKafkaUser;
 import io.strimzi.api.kafka.KafkaUserList;
 import io.strimzi.api.kafka.model.KafkaUser;
 import io.strimzi.certs.CertManager;
+import io.strimzi.operator.common.PasswordGenerator;
 import io.strimzi.operator.common.Reconciliation;
 import io.strimzi.operator.common.model.Labels;
 import io.strimzi.operator.common.model.ResourceType;
@@ -58,10 +59,7 @@ public class KafkaUserOperator {
     private final String caKeyName;
     private final String caNamespace;
     private final ScramShaCredentialsOperator scramShaCredentialOperator;
-    private PasswordGenerator passwordGenerator = new PasswordGenerator(12,
-            "abcdefghijklmnopqrstuvwxyz" +
-                    "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
-                    "0123456789");
+    private PasswordGenerator passwordGenerator = new PasswordGenerator(12);
 
     /**
      * @param vertx The Vertx instance

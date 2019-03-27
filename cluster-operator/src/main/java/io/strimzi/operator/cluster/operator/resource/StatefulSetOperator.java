@@ -7,6 +7,7 @@ package io.strimzi.operator.cluster.operator.resource;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.PersistentVolumeClaim;
 import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.Volume;
 import io.fabric8.kubernetes.api.model.apps.DoneableStatefulSet;
 import io.fabric8.kubernetes.api.model.apps.StatefulSet;
@@ -14,13 +15,16 @@ import io.fabric8.kubernetes.api.model.apps.StatefulSetList;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.dsl.MixedOperation;
 import io.fabric8.kubernetes.client.dsl.RollableScalableResource;
+import io.strimzi.operator.cluster.ClusterOperator;
 import io.strimzi.operator.cluster.model.AbstractModel;
+import io.strimzi.operator.cluster.model.KafkaCluster;
 import io.strimzi.operator.common.Annotations;
 import io.strimzi.operator.common.model.Labels;
 import io.strimzi.operator.common.operator.resource.AbstractScalableResourceOperator;
 import io.strimzi.operator.common.operator.resource.PodOperator;
 import io.strimzi.operator.common.operator.resource.PvcOperator;
 import io.strimzi.operator.common.operator.resource.ReconcileResult;
+import io.strimzi.operator.common.operator.resource.SecretOperator;
 import io.vertx.core.CompositeFuture;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
@@ -31,7 +35,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Predicate;
-import java.util.regex.Pattern;
 
 /**
  * Operations for {@code StatefulSets}s, which supports {@link #maybeRollingUpdate(StatefulSet, Predicate)}
@@ -47,6 +50,7 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
     protected final PodOperator podOperations;
     private final PvcOperator pvcOperations;
     protected final long operationTimeoutMs;
+    private final SecretOperator secretOperations;
 
     /**
      * Constructor
@@ -55,14 +59,11 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
      */
     public StatefulSetOperator(Vertx vertx, KubernetesClient client, long operationTimeoutMs) {
         this(vertx, client, operationTimeoutMs, new PodOperator(vertx, client), new PvcOperator(vertx, client));
-        client.pods().withName("").watchLog().getOutput();
-        CharSequence cs;
-        Pattern p;
-        p.matcher(cs);
     }
 
     public StatefulSetOperator(Vertx vertx, KubernetesClient client, long operationTimeoutMs, PodOperator podOperator, PvcOperator pvcOperator) {
         super(vertx, client, "StatefulSet");
+        this.secretOperations = new SecretOperator(vertx, client);
         this.podOperations = podOperator;
         this.operationTimeoutMs = operationTimeoutMs;
         this.pvcOperations = pvcOperator;
@@ -81,17 +82,26 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
      * before the process proceeds with the pod with the next higher number.
      */
     public Future<Void> maybeRollingUpdate(StatefulSet ss, Predicate<Pod> podRestart) {
+        String cluster = ss.getMetadata().getLabels().get(Labels.STRIMZI_CLUSTER_LABEL);
         String namespace = ss.getMetadata().getNamespace();
-        String name = ss.getMetadata().getName();
-        final int replicas = ss.getSpec().getReplicas();
-        log.debug("Considering rolling update of {}/{}", namespace, name);
-        Future<Void> f = Future.succeededFuture();
-        for (int i = 0; i < replicas; i++) {
-            String podName = name + "-" + i;
-            f = f.compose(ignored -> maybeRestartPod(ss, podName, podRestart));
-        }
-        return f;
+        Future<Secret> clusterCaKeySecretFuture = secretOperations.getAsync(
+                namespace, KafkaCluster.clusterCaKeySecretName(cluster));
+        Future<Secret> coKeySecretFuture = secretOperations.getAsync(
+                namespace, ClusterOperator.secretName(cluster));
+        return CompositeFuture.join(clusterCaKeySecretFuture, coKeySecretFuture).compose(compositeFuture -> {
+            Secret clusterCaKeySecret = compositeFuture.resultAt(0);
+            if (clusterCaKeySecret == null) {
+                return Future.failedFuture(ZookeeperLeaderFinder.missingSecretFuture(namespace, KafkaCluster.clusterCaKeySecretName(cluster)));
+            }
+            Secret coKeySecret = compositeFuture.resultAt(1);
+            if (coKeySecret == null) {
+                return Future.failedFuture(ZookeeperLeaderFinder.missingSecretFuture(namespace, ClusterOperator.secretName(cluster)));
+            }
+            return maybeRollingUpdate(ss, podRestart, clusterCaKeySecret, coKeySecret);
+        });
     }
+
+    public abstract Future<Void> maybeRollingUpdate(StatefulSet ss, Predicate<Pod> podRestart, Secret clusterCaSecret, Secret coKeySecret);
 
     public Future<Void> maybeDeletePodAndPvc(StatefulSet ss) {
         String namespace = ss.getMetadata().getNamespace();
