@@ -17,6 +17,7 @@ import io.vertx.core.Handler;
 import io.vertx.core.Vertx;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.common.Node;
 import org.apache.kafka.common.config.SslConfigs;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -41,6 +42,7 @@ import java.util.Base64;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
@@ -58,11 +60,13 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
     private final long operationTimeoutMs;
     private final Secret clusterCaCertSecret;
     private final Secret coKeySecret;
+    private final Vertx vertx;
 
-    public KafkaRoller(PodOperator podOperations, Predicate<Pod> podRestart,
+    public KafkaRoller(Vertx vertx, PodOperator podOperations, Predicate<Pod> podRestart,
                        long pollingIntervalMs, long operationTimeoutMs,
                        Secret clusterCaCertSecret, Secret coKeySecret) {
-        super(0, podOperations, podRestart);
+        super(operationTimeoutMs, podOperations, podRestart);
+        this.vertx = vertx;
         this.podOperations = podOperations;
         this.pollingIntervalMs = pollingIntervalMs;
         this.operationTimeoutMs = operationTimeoutMs;
@@ -91,6 +95,11 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
         public boolean isEmpty() {
             return pods.isEmpty();
         }
+
+        @Override
+        public String toString() {
+            return pods.toString();
+        }
     }
 
     @Override
@@ -111,31 +120,59 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
         } else {
             Integer podId = context.pods.get(0);
             String hostname = KafkaCluster.podDnsName(context.namespace, context.cluster, podId) + ":" + KafkaCluster.REPLICATION_PORT;
-            return adminClient(hostname).compose(ac -> {
-                Future<KafkaRollContext> f = Future.future();
-                return controller(ac).compose(controller -> {
-                    ArrayList<Integer> podsToRollExcludingController = new ArrayList<>(context.pods);
-                    podsToRollExcludingController.remove(controller);
-                    KafkaSorted ks = new KafkaSorted(ac);
-                    return findRollableBroker(podsToRollExcludingController, ks::canRoll, 60_000, 3_600_000).map(brokerId -> {
-                        int index = context.pods.indexOf(brokerId);
-                        context.pods.add(0, context.pods.remove(index));
-                        return context;
-                    });
-                }).map(r -> {
-                    ac.close();
-                    return r;
-                }).recover(e -> {
-                    ac.close();
-                    return Future.failedFuture(e);
+            Future<KafkaRollContext> result = Future.future();
+            adminClient(hostname).map(
+                ac -> {
+                    controller(ac)
+                        .compose(controller -> {
+                            ArrayList<Integer> podsToRollExcludingController = new ArrayList<>(context.pods);
+                            podsToRollExcludingController.remove(controller);
+                            KafkaSorted ks = new KafkaSorted(ac);
+                            return findRollableBroker(podsToRollExcludingController, ks::canRoll, 60_000, 3_600_000).map(brokerId -> {
+                                try {
+                                    int index = context.pods.indexOf(brokerId);
+                                    context.pods.add(0, context.pods.remove(index));
+                                    return context;
+                                } catch (Throwable t) {
+                                    log.debug(t);
+                                    throw t;
+                                }
+                            });
+                        })
+                        .setHandler(ar -> {
+                            vertx.executeBlocking(
+                                f -> {
+                                    try {
+                                        log.debug("Closing AC");
+                                        ac.close(10, TimeUnit.SECONDS);
+                                        log.debug("Closed AC");
+                                        f.complete();
+                                    } catch (Throwable t) {
+                                        log.debug(t);
+                                        f.fail(t);
+                                    }
+                                },
+                                fut -> {
+                                    if (ar.failed()) {
+                                        if (fut.failed()) {
+                                            ar.cause().addSuppressed(fut.cause());
+                                        }
+                                        result.fail(ar.cause());
+                                    } else if (fut.failed()) {
+                                        result.fail(fut.cause());
+                                    } else {
+                                        result.complete(ar.result());
+                                    }
+                                });
+                        });
+                    return null;
                 });
-            });
+            return result;
         }
     }
 
     private Future<AdminClient> adminClient(String bootstrapBroker) {
         // TODO TLS
-        Vertx vertx = null;
         Future<AdminClient> result = Future.future();
         vertx.executeBlocking(f -> {
             try {
@@ -151,10 +188,13 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
                     try {
                         Properties p = new Properties();
                         p.setProperty(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapBroker);
+                        p.setProperty(AdminClientConfig.SECURITY_PROTOCOL_CONFIG, "SSL");
                         p.setProperty(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, truststoreFile.getAbsolutePath());
+                        p.setProperty(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG, trustStorePassword);
                         p.setProperty(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG, trustStorePassword);
                         p.setProperty(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG, keystoreFile.getAbsolutePath());
                         p.setProperty(SslConfigs.SSL_KEYSTORE_PASSWORD_CONFIG, keyStorePassword);
+                        p.setProperty(SslConfigs.SSL_KEY_PASSWORD_CONFIG, keyStorePassword);
                         ac = AdminClient.create(p);
                     } finally {
                         keystoreFile.delete();
@@ -180,7 +220,7 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
             keyStore.load(null, password);
             Pattern parse = Pattern.compile("^---*BEGIN.*---*$(.*)^---*END.*---*$.*", Pattern.MULTILINE | Pattern.DOTALL);
 
-            String keyText = new String(decoder.decode(clusterSecretKey.getData().get("cluster-operator.crt")), StandardCharsets.ISO_8859_1);
+            String keyText = new String(decoder.decode(clusterSecretKey.getData().get("cluster-operator.key")), StandardCharsets.ISO_8859_1);
             Matcher matcher = parse.matcher(keyText);
             if (!matcher.find()) {
                 throw new RuntimeException("Bad client (CO) key. Key misses BEGIN or END markers");
@@ -188,7 +228,7 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
             PrivateKey clientKey = KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(
                     Base64.getMimeDecoder().decode(matcher.group(1))));
 
-            keyStore.setEntry("tls-probe",
+            keyStore.setEntry("cluster-operator",
                     new KeyStore.PrivateKeyEntry(clientKey, new Certificate[]{clientCert}),
                     new KeyStore.PasswordProtection(password));
 
@@ -227,112 +267,23 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
         }
     }
 
-
+    /**
+     * Completes the returned future with the id of the controller of the cluster.
+     * This will be {@link Node#noNode()} if there is not currently a controller.
+     */
     Future<Integer> controller(AdminClient ac) {
         Future<Integer> result = Future.future();
         ac.describeCluster().controller().whenComplete((controllerNode, exception) -> {
             if (exception != null) {
                 result.fail(exception);
             } else {
-                result.complete(controllerNode.id());
+                int id = controllerNode.id();
+                log.debug("controller is {}", id);
+                result.complete(id);
             }
         });
         return result;
     }
-
-    ////////////////////////////////////////////
-    /*
-
-
-    Future<Integer> leader2(String bootstrapBroker) {
-        // TODO retry
-        // TODO TLS
-        /*
-        1. We nee
-         * /
-        Future<Integer> result = Future.future();
-        AdminClient ac = getAdminClient(bootstrapBroker);
-        // Get all topic names
-        Future<Collection<TopicDescription>> compose = topicNames(ac)
-                // Get topic descriptions
-                .compose(names -> describeTopics(ac, names));
-        // Group topics by broker
-        compose
-            .map(tds -> groupReplicasByBroker(tds));
-        // Get topic config for next broker
-        compose
-            .map(tds -> {
-                List<ConfigResource> topicNames = tds.stream().map(td -> td.name())
-                        .map((String topicName) -> new ConfigResource(ConfigResource.Type.TOPIC, topicName))
-                        .collect(Collectors.toList());
-                Future f = Future.future();
-                ac.describeConfigs(topicNames).all().whenComplete((x, error) -> {
-                    if (error != null) {
-                        f.fail(error);
-                    } else {
-                        Map<ConfigResource, Config> x1 = x;
-                        ConfigResource cr = null;
-                        x1.get(cr).get(TopicConfig.MIN_IN_SYNC_REPLICAS_CONFIG);
-                    }
-                });
-                return null;
-            });
-
-        return result;
-    }
-
-    private Map<Node, List<TopicPartitionInfo>> groupReplicasByBroker(Collection<TopicDescription> tds) {
-        Map<Node, List<TopicPartitionInfo>> byBroker = new HashMap<>();
-        for (TopicDescription td : tds) {
-            for (TopicPartitionInfo pd : td.partitions()) {
-                for (Node broker : pd.replicas()) {
-                    List<TopicPartitionInfo> topicPartitionInfos = byBroker.get(broker);
-                    if (topicPartitionInfos == null) {
-                        topicPartitionInfos = new ArrayList<>();
-                        byBroker.put(broker, topicPartitionInfos);
-                    }
-                    topicPartitionInfos.add(pd);
-                }
-            }
-        }
-        return byBroker;
-    }
-
-    private Future<Collection<TopicDescription>> describeTopics(AdminClient ac, Set<String> names) {
-        Future<Collection<TopicDescription>> descFuture = Future.future();
-        ac.describeTopics(names).all()
-                .whenComplete((tds, error) -> {
-                    if (error != null) {
-                        descFuture.fail(error);
-                    } else {
-                        descFuture.complete(tds.values());
-                    }
-                });
-        return descFuture;
-    }
-
-    private Future<Set<String>> topicNames(AdminClient ac) {
-        Future<Set<String>> namesFuture = Future.future();
-        ac.listTopics(new ListTopicsOptions().listInternal(true)).names()
-                .whenComplete((names, error) -> {
-                    if (error != null) {
-                        namesFuture.fail(error);
-                    } else {
-                        namesFuture.complete(names);
-                    }
-                });
-        return namesFuture;
-    }
-
-    private AdminClient getAdminClient(String bootstrapBroker) {
-        Properties p = new Properties();
-        p.setProperty(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapBroker);
-        p.setProperty(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, "");
-        p.setProperty(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG, "");
-        return AdminClient.create(p);
-    }
-    */
-    //////////////////////////////////////////
 
     /**
      * Find the first broker in the given {@code brokers} which is rollable
@@ -345,19 +296,22 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
     Future<Integer> findRollableBroker(List<Integer> brokers, Function<Integer, Future<Boolean>> rollable, long pollMs, long timeoutMs) {
         Future<Integer> result = Future.future();
         long deadline = System.currentTimeMillis() + timeoutMs;
-        Vertx vertx = null;
         Handler<Long> handler = new Handler<Long>() {
 
             @Override
             public void handle(Long event) {
                 findRollableBroker(brokers, rollable).map(brokerId -> {
                     if (brokerId != -1) {
+                        log.debug("Next rollable broker is {}", brokerId);
                         result.complete(brokerId);
                     } else {
-                        if (System.currentTimeMillis() > deadline) {
+                        long t = deadline - System.currentTimeMillis();
+                        if (t <= 0) {
+                            log.debug("Not rollable brokers, giving up after {}ms", timeoutMs);
                             result.complete(brokers.get(0));
                         } else {
-                            // TODO vertx.setTimer(pollMs, this);
+                            log.debug("Not rollable brokers, yet {}. Will retry in {}ms", pollMs);
+                            vertx.setTimer(Math.max(pollMs, t), this);
                         }
                     }
                     return null;
@@ -376,11 +330,18 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
             public Future<Iterator<Integer>> apply(Iterator<Integer> iterator) {
                 if (iterator.hasNext()) {
                     Integer brokerId = iterator.next();
+                    log.debug("Determining whether broker {} can be rolled", brokerId);
                     return rollable.apply(brokerId).compose(canRoll -> {
                         if (canRoll) {
+                            log.debug("Broker {} can be rolled", brokerId);
                             result.complete(brokerId);
                             return Future.succeededFuture();
                         }
+                        log.debug("Broker {} cannot be rolled right now", brokerId);
+                        return Future.succeededFuture(iterator).compose(this);
+                    }).recover(error -> {
+                        log.warn(error);
+                        result.fail(error);
                         return Future.succeededFuture(iterator).compose(this);
                     });
                 } else {

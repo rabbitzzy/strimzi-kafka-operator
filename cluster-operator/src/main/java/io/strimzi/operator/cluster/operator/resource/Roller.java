@@ -52,11 +52,13 @@ public abstract class Roller<P, C extends Roller.Context<P>> {
     }
 
     public interface Context<P> {
-        /** Get the next pod to be rolled */
+
+        /** @return the next pod to be rolled */
         P next();
-        /** Are there more pods to be rolled? */
+
+        /** @return true iff there more pods to be rolled */
         boolean isEmpty();
-        /** Used for logging */
+
         String toString();
     }
 
@@ -166,7 +168,6 @@ public abstract class Roller<P, C extends Roller.Context<P>> {
      */
     protected Future<Void> restartPod(StatefulSet ss, Pod pod) {
         long pollingIntervalMs = 1_000;
-        long timeoutMs = operationTimeoutMs;
         String namespace = ss.getMetadata().getNamespace();
         String name = ss.getMetadata().getName();
         String podName = pod.getMetadata().getName();
@@ -180,7 +181,7 @@ public abstract class Roller<P, C extends Roller.Context<P>> {
         log.debug("Rolling update of {}/{}: Waiting for pod {} to be deleted", namespace, name, podName);
         Future<Void> podReconcileFuture =
                 podOperations.reconcile(namespace, podName, null).compose(ignore -> {
-                    Future<Void> del = podOperations.waitFor(namespace, name, pollingIntervalMs, timeoutMs, (ignore1, ignore2) -> {
+                    Future<Void> del = podOperations.waitFor(namespace, name, pollingIntervalMs, operationTimeoutMs, (ignore1, ignore2) -> {
                         // predicate - changed generation means pod has been updated
                         String newUid = getPodUid(podOperations.get(namespace, podName));
                         boolean done = !deleted.equals(newUid);

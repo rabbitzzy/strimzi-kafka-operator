@@ -18,23 +18,24 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Predicate;
+import java.util.stream.Collectors;
 
-public class ZookeeperRoller extends Roller<Pod, ZookeeperRoller.ZkRollContext<Pod>> {
+public class ZookeeperRoller extends Roller<Pod, ZookeeperRoller.ZkRollContext> {
 
     private static final Logger log = LogManager.getLogger(ZookeeperRoller.class.getName());
 
-    public static class ZkRollContext<P> implements Roller.Context<P> {
+    public static class ZkRollContext implements Roller.Context<Pod> {
 
-        private final List<P> pods;
-        private final List<P> allPods;
+        private final List<Pod> pods;
+        private final List<Pod> allPods;
 
-        ZkRollContext(List<P> pods) {
+        ZkRollContext(List<Pod> pods) {
             this.allPods = Collections.unmodifiableList(new ArrayList<>(pods));
             this.pods = new ArrayList<>(pods);
         }
 
         @Override
-        public P next() {
+        public Pod next() {
             return pods.remove(0);
         }
 
@@ -44,7 +45,7 @@ public class ZookeeperRoller extends Roller<Pod, ZookeeperRoller.ZkRollContext<P
         }
 
         public String toString() {
-            return pods.toString();
+            return pods.stream().map(pod -> pod.getMetadata().getName()).collect(Collectors.joining(", "));
         }
     }
 
@@ -62,7 +63,7 @@ public class ZookeeperRoller extends Roller<Pod, ZookeeperRoller.ZkRollContext<P
     }
 
     @Override
-    Future<ZkRollContext<Pod>> context(StatefulSet ss) {
+    Future<ZkRollContext> context(StatefulSet ss) {
         List<Pod> pods = new ArrayList<>();
         String cluster = ss.getMetadata().getLabels().get(Labels.STRIMZI_CLUSTER_LABEL);
         // We don't really need to go getting all the pods here. ZLF doesn't need the whole pod, just it's name and a couple of other bits
@@ -71,11 +72,11 @@ public class ZookeeperRoller extends Roller<Pod, ZookeeperRoller.ZkRollContext<P
             Pod pod = podOperations.get(ss.getMetadata().getNamespace(), KafkaResources.zookeeperPodName(cluster, i));
             pods.add(pod);
         }
-        return Future.succeededFuture(new ZkRollContext<>(pods));
+        return Future.succeededFuture(new ZkRollContext(pods));
     }
 
     @Override
-    Future<ZkRollContext<Pod>> sort(ZkRollContext<Pod> context) {
+    Future<ZkRollContext> sort(ZkRollContext context) {
         if (context.pods.size() <= 1) {
             return Future.succeededFuture(context);
         } else {

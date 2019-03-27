@@ -238,7 +238,7 @@ public class ZookeeperLeaderFinder {
         vertx.createNetClient(netClientOptions)
             .connect(port, host, ar -> {
                 if (ar.failed()) {
-                    log.warn("ZK {}:{}: failed to connect to zookeeper:", host, port, ar.cause().getMessage());
+                    log.warn("ZK {}:{}: failed to connect to zookeeper: {}", host, port, ar.cause().getMessage());
                     future.fail(ar.cause());
                 } else {
                     log.debug("ZK {}:{}: connected", host, port);

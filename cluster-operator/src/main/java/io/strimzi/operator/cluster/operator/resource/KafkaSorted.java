@@ -4,7 +4,6 @@
  */
 package io.strimzi.operator.cluster.operator.resource;
 
-import io.vertx.core.CompositeFuture;
 import io.vertx.core.Future;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.Config;
@@ -41,7 +40,11 @@ public class KafkaSorted {
         // 1. Get all topic names
         Future<Set<String>> topicNames = topicNames();
         // 2. Get topic descriptions
-        descriptions = topicNames.compose(names -> describeTopics(names));
+        descriptions = topicNames.compose(names -> {
+            log.debug("Got {} topic names", names.size());
+            log.trace("Topic names {}", names);
+            return describeTopics(names);
+        });
     }
 
 
@@ -50,28 +53,47 @@ public class KafkaSorted {
      * producers with acks=all publishing to topics with a {@code min.in.sync.replicas}.
      */
     Future<Boolean> canRoll(int broker) {
+        log.debug("Determining whether broker {} can be rolled", broker);
         return canRollBroker(descriptions, broker);
     }
 
     private Future<Boolean> canRollBroker(Future<Collection<TopicDescription>> descriptions, int broker) {
         Future<List<TopicDescription>> topicsOnBroker = descriptions
-                .map(tds -> groupTopicsByBroker(tds).getOrDefault(broker, Collections.emptyList()));
+                .compose(tds -> {
+
+                    log.debug("Got {} topic descriptions", tds.size());
+                    try {
+                        return Future.succeededFuture(groupTopicsByBroker(tds).getOrDefault(broker, Collections.emptyList()));
+                    } catch (Throwable t) {
+                        log.debug("wtf", t);
+                        return Future.failedFuture(t);
+                    }
+                }).recover(error -> {
+                    log.warn(error);
+                    return Future.failedFuture(error);
+                });
 
         // 4. Get topic configs (for those on $broker)
         Future<Map<String, Config>> configs = topicsOnBroker
                 .compose(td -> topicConfigs(td.stream().map(t -> t.name()).collect(Collectors.toList())));
 
         // 5. join
-        return CompositeFuture.join(topicsOnBroker, configs).map(cf -> {
-            Collection<TopicDescription> tds = cf.resultAt(0);
-            Map<String, Config> nameToConfig = cf.resultAt(1);
-            return tds.stream().noneMatch(
+        return configs.map(x -> {
+            log.debug("join");
+            Collection<TopicDescription> tds = topicsOnBroker.result();
+            Map<String, Config> nameToConfig = x;
+            boolean b = tds.stream().noneMatch(
                 td -> {
                     if (wouldAffectAvailability(broker, nameToConfig, td)) {
                         return true;
                     }
                     return false;
                 });
+            log.debug("{}", b);
+            return b;
+        }).recover(error -> {
+            log.warn(error);
+            return Future.failedFuture(error);
         });
     }
 
@@ -121,6 +143,7 @@ public class KafkaSorted {
     }
 
     private Future<Map<String, Config>> topicConfigs(Collection<String> topicNames) {
+        log.debug("Getting topic configs for {} topics", topicNames.size());
         List<ConfigResource> configs = topicNames.stream()
                 .map((String topicName) -> new ConfigResource(ConfigResource.Type.TOPIC, topicName))
                 .collect(Collectors.toList());
@@ -129,6 +152,7 @@ public class KafkaSorted {
             if (error != null) {
                 f.fail(error);
             } else {
+                log.debug("Got topic configs for {} topics", topicNames.size());
                 f.complete(topicNameToConfig.entrySet().stream()
                         .collect(Collectors.toMap(
                             entry -> entry.getKey().name(),
@@ -141,6 +165,7 @@ public class KafkaSorted {
     private Map<Integer, List<TopicDescription>> groupTopicsByBroker(Collection<TopicDescription> tds) {
         Map<Integer, List<TopicDescription>> byBroker = new HashMap<>();
         for (TopicDescription td : tds) {
+            log.debug("{}", td);
             for (TopicPartitionInfo pd : td.partitions()) {
                 for (Node broker : pd.replicas()) {
                     List<TopicDescription> topicPartitionInfos = byBroker.get(broker.id());
@@ -152,6 +177,7 @@ public class KafkaSorted {
                 }
             }
         }
+        log.debug("returning");
         return byBroker;
     }
 
@@ -179,6 +205,7 @@ public class KafkaSorted {
                     if (error != null) {
                         descFuture.fail(error);
                     } else {
+                        log.debug("Got topic descriptions for {} topics", tds.size());
                         descFuture.complete(tds.values());
                     }
                 });
@@ -192,6 +219,7 @@ public class KafkaSorted {
                     if (error != null) {
                         namesFuture.fail(error);
                     } else {
+                        log.debug("Got {} topic names", names.size());
                         namesFuture.complete(names);
                     }
                 });

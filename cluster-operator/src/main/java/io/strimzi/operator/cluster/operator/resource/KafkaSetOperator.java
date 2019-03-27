@@ -133,7 +133,7 @@ public class KafkaSetOperator extends StatefulSetOperator {
 
     @Override
     public Future<Void> maybeRollingUpdate(StatefulSet ss, Predicate<Pod> podRestart, Secret clusterCaCertSecret, Secret coKeySecret) {
-        return new KafkaRoller(podOperations, podRestart, 1_000, operationTimeoutMs,
+        return new KafkaRoller(vertx, podOperations, podRestart, 1_000, operationTimeoutMs,
                 clusterCaCertSecret, coKeySecret).maybeRollingUpdate(ss);
     }
 

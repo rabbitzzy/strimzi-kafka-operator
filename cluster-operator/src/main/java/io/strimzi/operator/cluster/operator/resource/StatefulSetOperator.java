@@ -15,6 +15,7 @@ import io.fabric8.kubernetes.api.model.apps.StatefulSetList;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.dsl.MixedOperation;
 import io.fabric8.kubernetes.client.dsl.RollableScalableResource;
+import io.strimzi.api.kafka.model.KafkaResources;
 import io.strimzi.operator.cluster.ClusterOperator;
 import io.strimzi.operator.cluster.model.AbstractModel;
 import io.strimzi.operator.cluster.model.KafkaCluster;
@@ -85,7 +86,7 @@ public abstract class StatefulSetOperator extends AbstractScalableResourceOperat
         String cluster = ss.getMetadata().getLabels().get(Labels.STRIMZI_CLUSTER_LABEL);
         String namespace = ss.getMetadata().getNamespace();
         Future<Secret> clusterCaKeySecretFuture = secretOperations.getAsync(
-                namespace, KafkaCluster.clusterCaKeySecretName(cluster));
+                namespace, KafkaResources.clusterCaCertificateSecretName(cluster));
         Future<Secret> coKeySecretFuture = secretOperations.getAsync(
                 namespace, ClusterOperator.secretName(cluster));
         return CompositeFuture.join(clusterCaKeySecretFuture, coKeySecretFuture).compose(compositeFuture -> {
