@@ -64,20 +64,26 @@ abstract class Roller<P, C extends Roller.Context<P>> {
                                Secret clusterCaCertSecret, Secret coKeySecret);
 
     /**
-     * Sort the context, potentially changing the next pod to be rolled.
+     * Sort the context, potentially changing the next pod to be rolled, etc.,
+     * returning a Future that completes when the sorting is complete.
      */
     protected abstract Future<C> sort(C context, Predicate<Pod> podRestart);
 
     /**
-     * A future which should complete when the given pod is ready to be rolled
+     * Returns a future which completes when the given pod is ready to be rolled
      */
     protected abstract Future<Void> beforeRestart(Pod pod);
 
     /**
-     * A future which should complete when the given pod is "ready" after being rolled.
+     * Returns a future which completes when the given pod is "ready" after being rolled
+     * (and thus the next pods can be rolled, or the rolling restart is completed).
      */
     protected abstract Future<Void> afterRestart(Pod pod);
 
+    /**
+     * Returns a Future which completed with the actual pod corresponding to the abstract representation
+     * of the given {@code pod}.
+     */
     protected abstract Future<Pod> pod(StatefulSet ss, P pod);
 
     private static String getPodUid(Pod resource) {
@@ -88,17 +94,11 @@ abstract class Roller<P, C extends Roller.Context<P>> {
     }
 
     /**
-     * Get list of all pods (by applying {@link #context(StatefulSet, Secret, Secret)}.
-     * While collection not empty
-     * {@linkplain #sort(Context, Predicate) sort the collection} and get the first element
-     * For this element:
-     *   Does pod need restart?
-     *   Is size(collection) > 1 and pod "leader":
-     *     Add to end of queue
-     *   Else:
-     *     Precondition
-     *     Restart
-     *     Postcondition
+     * Perform a rolling restart of the pods in the given StatefulSet.
+     * Pods will be tested for whether the really need rolling using the given {@code podRestart}.
+     * If a pod does indeed need restarting {@link #beforeRestart(Pod)} is called before and
+     * {@link #afterRestart(Pod)} is called afterwards.
+     * The returned Future is completed when the rolling restart is completed.
      */
     public Future<Void> rollingRestart(StatefulSet ss,
                                 Secret clusterCaCertSecret, Secret coKeySecret, Predicate<Pod> podRestart) {

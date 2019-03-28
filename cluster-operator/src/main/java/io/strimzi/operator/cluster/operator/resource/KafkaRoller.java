@@ -12,6 +12,7 @@ import io.strimzi.operator.cluster.model.KafkaCluster;
 import io.strimzi.operator.common.PasswordGenerator;
 import io.strimzi.operator.common.model.Labels;
 import io.strimzi.operator.common.operator.resource.PodOperator;
+import io.vertx.core.AsyncResult;
 import io.vertx.core.Future;
 import io.vertx.core.Vertx;
 import org.apache.kafka.clients.admin.AdminClient;
@@ -97,6 +98,7 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
         private final String cluster;
         private final Secret clusterCaCertSecret;
         private final Secret coKeySecret;
+        public AdminClient ac;
 
         public KafkaRollContext(String namespace, String cluster, List<Integer> pods, Secret clusterCaCertSecret, Secret coKeySecret) {
             this.namespace = namespace;
@@ -129,115 +131,145 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
     @Override
     protected Future<KafkaRollContext> sort(KafkaRollContext context, Predicate<Pod> podRestart) {
         return filterPods(context, podRestart)
-                .compose(pod -> {
-                    if (pod != null) {
-                        return adminClient(context, pod);
-                    } else {
-                        return Future.succeededFuture(null);
-                    }
-                }).compose(adminClient -> {
-                    if (adminClient != null) {
-                        return prependNextRollablePod(context, podRestart, adminClient);
-                    } else {
-                        return Future.succeededFuture(context);
-                    }
-                });
+            .compose(pod -> {
+                if (pod != null) {
+                    Future<KafkaRollContext> result = Future.future();
+                    adminClient(context, pod)
+                        .compose(i -> findNextRollable(context, podRestart))
+                        .setHandler(ar -> {
+                            close(context, result, ar);
+                        });
+                    return result;
+                } else {
+                    return Future.succeededFuture(context);
+                }
+            });
     }
 
-    private Future<KafkaRollContext> prependNextRollablePod(KafkaRollContext context, Predicate<Pod> podRestart, AdminClient ac) {
-        Future<KafkaRollContext> result = Future.future();
-        controller(ac)
+    /**
+     * Returns a Future which completes with an AdminClient instance.
+     */
+    private Future<AdminClient> adminClient(KafkaRollContext context, Pod pod) {
+        String hostname = KafkaCluster.podDnsName(context.namespace, context.cluster, pod.getMetadata().getName()) + ":" + KafkaCluster.REPLICATION_PORT;
+        Future<AdminClient> result = Future.future();
+        vertx.executeBlocking(
+            f -> {
+                try {
+                    PasswordGenerator pg = new PasswordGenerator(12);
+                    AdminClient ac;
+                    String trustStorePassword = pg.generate();
+                    File truststoreFile = setupTrustStore(trustStorePassword.toCharArray(), Ca.cert(context.clusterCaCertSecret, Ca.CA_CRT));
+                    try {
+                        String keyStorePassword = pg.generate();
+                        File keystoreFile = setupKeyStore(context.coKeySecret,
+                                keyStorePassword.toCharArray(),
+                                Ca.cert(context.coKeySecret, "cluster-operator.crt"));
+                        try {
+                            Properties p = new Properties();
+                            p.setProperty(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, hostname);
+                            p.setProperty(AdminClientConfig.SECURITY_PROTOCOL_CONFIG, "SSL");
+                            p.setProperty(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, truststoreFile.getAbsolutePath());
+                            p.setProperty(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG, trustStorePassword);
+                            p.setProperty(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG, trustStorePassword);
+                            p.setProperty(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG, keystoreFile.getAbsolutePath());
+                            p.setProperty(SslConfigs.SSL_KEYSTORE_PASSWORD_CONFIG, keyStorePassword);
+                            p.setProperty(SslConfigs.SSL_KEY_PASSWORD_CONFIG, keyStorePassword);
+                            ac = AdminClient.create(p);
+                        } finally {
+                            keystoreFile.delete();
+                        }
+                    } finally {
+                        truststoreFile.delete();
+                    }
+                    context.ac = ac;
+                    f.complete(ac);
+                } catch (Exception e) {
+                    f.fail(e);
+                }
+            },
+            result.completer());
+        return result;
+    }
+
+    private void close(KafkaRollContext context, Future<KafkaRollContext> result, AsyncResult<KafkaRollContext> ar) {
+        AdminClient ac = context.ac;
+        if (ac != null) {
+            context.ac = null;
+            vertx.executeBlocking(
+                f -> {
+                    try {
+                        log.debug("Closing AC");
+                        ac.close(10, TimeUnit.SECONDS);
+                        log.debug("Closed AC");
+                        f.complete();
+                    } catch (Throwable t) {
+                        log.debug(t);
+                        f.fail(t);
+                    }
+                },
+                fut -> {
+                    if (ar.failed()) {
+                        if (fut.failed()) {
+                            ar.cause().addSuppressed(fut.cause());
+                        }
+                        result.fail(ar.cause());
+                    } else if (fut.failed()) {
+                        result.fail(fut.cause());
+                    } else {
+                        result.complete(ar.result());
+                    }
+                });
+        }
+    }
+
+    protected Future<KafkaRollContext> filterAndFindNextRollable(KafkaRollContext context, Predicate<Pod> podRestart) {
+        return filterPods(context, podRestart)
+            .compose(pod -> {
+                if (pod != null) {
+                    return findNextRollable(context, podRestart);
+                } else {
+                    return Future.succeededFuture(context);
+                }
+            });
+    }
+
+    private Future<KafkaRollContext> findNextRollable(KafkaRollContext context, Predicate<Pod> podRestart) {
+        // TODO how do we guarantee this algo terminates?
+        // Right now it could bounce between the controller and a non-rollable non-broker indefinitely
+        // It should probably:
+        //   * Delay between each checking for rollablity of a given broker
+        //   * (Eventually) give up when a broker is not rollable a number of times
+
+        return controller(context.ac)
             .compose(controller -> {
-                KafkaSorted ks = new KafkaSorted(ac);
                 Integer podId = context.pods.get(0);
                 if (podId == controller && context.pods.size() > 1) {
                     // Arrange to do the controller last when there are other brokers to be rolled
+                    log.debug("Deferring restart of {} (it's the controller)", podId);
                     context.pods.add(context.pods.remove(0));
-                    return sort(context, podRestart);
+                    return filterAndFindNextRollable(context, podRestart);
                 } else {
+                    KafkaSorted ks = new KafkaSorted(context.ac);
                     return ks.canRoll(podId).compose(canRoll -> {
                         if (canRoll) {
                             // The first pod in the list needs rolling and is rollable: We're done
                             return Future.succeededFuture(context);
                         } else {
                             context.pods.add(context.pods.remove(0));
-                            return sort(context, podRestart);
+                            return filterAndFindNextRollable(context, podRestart);
                         }
                     });
                 }
-            })
-            .setHandler(ar -> {
-                vertx.executeBlocking(
-                    f -> {
-                        try {
-                            log.debug("Closing AC");
-                            ac.close(10, TimeUnit.SECONDS);
-                            log.debug("Closed AC");
-                            f.complete();
-                        } catch (Throwable t) {
-                            log.debug(t);
-                            f.fail(t);
-                        }
-                    },
-                    fut -> {
-                        if (ar.failed()) {
-                            if (fut.failed()) {
-                                ar.cause().addSuppressed(fut.cause());
-                            }
-                            result.fail(ar.cause());
-                        } else if (fut.failed()) {
-                            result.fail(fut.cause());
-                        } else {
-                            result.complete(ar.result());
-                        }
-                    });
             });
-        return result;
     }
+
 
     /**
-     * Returns a Future which completes with the AdminClient
+     * If {@link KafkaRollContext#pods} is empty then return a Future which succeeds with null.
+     * Otherwise get the next pod from {@link KafkaRollContext#pods} and test it with the given podRestart.
+     * If the pod needs to be restarted then complete the returned future with it.
+     * Otherwise remove that pod from {@link KafkaRollContext#pods} and recurse.
      */
-    private Future<AdminClient> adminClient(KafkaRollContext context, Pod pod) {
-        String hostname = KafkaCluster.podDnsName(context.namespace, context.cluster, pod.getMetadata().getName()) + ":" + KafkaCluster.REPLICATION_PORT;
-        Future<AdminClient> result = Future.future();
-        vertx.executeBlocking(f -> {
-            try {
-                PasswordGenerator pg = new PasswordGenerator(12);
-                AdminClient ac;
-                String trustStorePassword = pg.generate();
-                File truststoreFile = setupTrustStore(trustStorePassword.toCharArray(), Ca.cert(context.clusterCaCertSecret, Ca.CA_CRT));
-                try {
-                    String keyStorePassword = pg.generate();
-                    File keystoreFile = setupKeyStore(context.coKeySecret,
-                            keyStorePassword.toCharArray(),
-                            Ca.cert(context.coKeySecret, "cluster-operator.crt"));
-                    try {
-                        Properties p = new Properties();
-                        p.setProperty(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, hostname);
-                        p.setProperty(AdminClientConfig.SECURITY_PROTOCOL_CONFIG, "SSL");
-                        p.setProperty(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, truststoreFile.getAbsolutePath());
-                        p.setProperty(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG, trustStorePassword);
-                        p.setProperty(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG, trustStorePassword);
-                        p.setProperty(SslConfigs.SSL_KEYSTORE_LOCATION_CONFIG, keystoreFile.getAbsolutePath());
-                        p.setProperty(SslConfigs.SSL_KEYSTORE_PASSWORD_CONFIG, keyStorePassword);
-                        p.setProperty(SslConfigs.SSL_KEY_PASSWORD_CONFIG, keyStorePassword);
-                        ac = AdminClient.create(p);
-                    } finally {
-                        keystoreFile.delete();
-                    }
-                } finally {
-                    truststoreFile.delete();
-                }
-                f.complete(ac);
-            } catch (Exception e) {
-                f.fail(e);
-            }
-        },
-            result.completer());
-        return result;
-    }
-
     private Future<Pod> filterPods(KafkaRollContext context, Predicate<Pod> podRestart) {
         if (context.pods.isEmpty()) {
             return Future.succeededFuture(null);
@@ -316,7 +348,7 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
 
     /**
      * Completes the returned future with the id of the controller of the cluster.
-     * This will be {@link Node#noNode()} if there is not currently a controller.
+     * This will be -1 if there is not currently a controller.
      */
     Future<Integer> controller(AdminClient ac) {
         Future<Integer> result = Future.future();
@@ -324,7 +356,7 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
             if (exception != null) {
                 result.fail(exception);
             } else {
-                int id = controllerNode.id();
+                int id = Node.noNode().equals(controllerNode) ? -1 : controllerNode.id();
                 log.debug("controller is {}", id);
                 result.complete(id);
             }
