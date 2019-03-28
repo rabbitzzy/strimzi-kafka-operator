@@ -6,6 +6,7 @@ package io.strimzi.operator.cluster.operator.resource;
 
 import io.fabric8.kubernetes.api.model.Pod;
 import io.fabric8.kubernetes.api.model.PodBuilder;
+import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.apps.StatefulSet;
 import io.fabric8.kubernetes.api.model.apps.StatefulSetBuilder;
 import io.strimzi.operator.common.operator.resource.PodOperator;
@@ -22,6 +23,7 @@ import org.junit.runner.RunWith;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -44,12 +46,7 @@ public class RollerTest {
 
         @Override
         public P next() {
-            return pods.remove(0);
-        }
-
-        @Override
-        public boolean isEmpty() {
-            return pods.isEmpty();
+            return pods.isEmpty() ? null : pods.remove(0);
         }
 
         public String toString() {
@@ -60,7 +57,7 @@ public class RollerTest {
     @Test
     public void testLeaderRolledLast(TestContext context) {
         Function<ListContext<Integer>, Future<ListContext<Integer>>> sort = listContext -> {
-            if (listContext.pods.get(0).equals(3)) {
+            if (!listContext.pods.isEmpty() && listContext.pods.get(0).equals(3)) {
                 log.debug("Pod 3 must be rolled last");
                 listContext.pods.add(listContext.next());
             }
@@ -82,7 +79,7 @@ public class RollerTest {
             @Override
             public Future<ListContext<Integer>> apply(ListContext<Integer> listContext) {
                 int leader = !changedLeader ? 1 : 3;
-                if (listContext.pods.get(0).equals(leader)) {
+                if (!listContext.pods.isEmpty() && listContext.pods.get(0).equals(leader)) {
                     log.debug("Pod {} must be rolled last", leader);
                     listContext.pods.add(listContext.next());
                     changedLeader = true;
@@ -110,38 +107,42 @@ public class RollerTest {
         List<String> pre = new ArrayList<>();
         List<String> post = new ArrayList<>();
 
-        Roller<Integer, ListContext<Integer>> roller = new Roller<Integer, ListContext<Integer>>(0, po,
-            pod -> true) {
+        Roller<Integer, ListContext<Integer>> roller = new Roller<Integer, ListContext<Integer>>(0, po) {
 
             @Override
-            Future<ListContext<Integer>> context(StatefulSet ss) {
+            protected Future<ListContext<Integer>> context(StatefulSet ss, Secret s, Secret s2) {
                 return Future.succeededFuture(new ListContext<>(IntStream.range(0, 5).boxed().collect(Collectors.toList())));
             }
 
             @Override
-            Future<ListContext<Integer>> sort(ListContext<Integer> context) {
+            protected Future<ListContext<Integer>> sort(ListContext<Integer> context, Predicate<Pod> restartPod) {
                 return sort.apply(context);
             }
 
             @Override
-            Future<Void> beforeRestart(Pod pod) {
+            protected Future<Void> beforeRestart(Pod pod) {
                 pre.add(pod.getMetadata().getName());
                 return Future.succeededFuture();
             }
 
             @Override
-            Future<Void> afterRestart(Pod pod) {
+            protected Future<Void> afterRestart(Pod pod) {
                 post.add(pod.getMetadata().getName());
                 return Future.succeededFuture();
             }
 
             @Override
-            String podName(StatefulSet ss, Integer pod) {
-                return ss.getMetadata().getName() + "-" + pod;
+            protected Future<Pod> pod(StatefulSet ss, Integer pod) {
+                return Future.succeededFuture(new PodBuilder()
+                    .withNewMetadata()
+                        .withNamespace(ss.getMetadata().getNamespace())
+                        .withName(ss.getMetadata().getName() + "-" + pod)
+                    .endMetadata()
+                    .build());
             }
 
             @Override
-            protected Future<Void> restartPod(StatefulSet ss, Pod pod) {
+            protected Future<Void> restart(StatefulSet ss, Pod pod) {
                 rolled.add(pod.getMetadata().getName());
                 return Future.succeededFuture();
             }
@@ -156,7 +157,7 @@ public class RollerTest {
                 .withReplicas(5)
                 .endSpec()
                 .build();
-        roller.maybeRollingUpdate(ss).setHandler(ar -> {
+        roller.rollingRestart(ss, null, null, pod -> true).setHandler(ar -> {
             if (ar.failed()) {
                 context.fail(ar.cause());
             } else {
@@ -185,33 +186,32 @@ public class RollerTest {
         List<String> pre = new ArrayList<>();
         List<String> post = new ArrayList<>();
 
-        Roller<Integer, ListContext<Integer>> roller = new Roller<Integer, ListContext<Integer>>(0, po,
-            pod -> true) {
+        Roller<Integer, ListContext<Integer>> roller = new Roller<Integer, ListContext<Integer>>(0, po) {
 
             @Override
-            Future<ListContext<Integer>> context(StatefulSet ss) {
+            protected Future<ListContext<Integer>> context(StatefulSet ss, Secret s, Secret s2) {
                 return Future.succeededFuture(new ListContext<>(IntStream.range(0, 5).boxed().collect(Collectors.toList())));
             }
 
             @Override
-            Future<ListContext<Integer>> sort(ListContext<Integer> context) {
+            protected Future<ListContext<Integer>> sort(ListContext<Integer> context, Predicate<Pod> restartPod) {
                 return Future.succeededFuture(context);
             }
 
             @Override
-            Future<Void> beforeRestart(Pod pod) {
+            protected Future<Void> beforeRestart(Pod pod) {
                 pre.add(pod.getMetadata().getName());
                 return Future.succeededFuture();
             }
 
             @Override
-            Future<Void> afterRestart(Pod pod) {
+            protected Future<Void> afterRestart(Pod pod) {
                 post.add(pod.getMetadata().getName());
                 return Future.succeededFuture();
             }
 
             @Override
-            protected Future<Void> restartPod(StatefulSet ss, Pod pod) {
+            protected Future<Void> restart(StatefulSet ss, Pod pod) {
                 rolled.add(pod.getMetadata().getName());
                 if (pod.getMetadata().getName().equals("foo-kafka-2")) {
                     return Future.failedFuture(new RuntimeException("Test exception"));
@@ -221,8 +221,13 @@ public class RollerTest {
             }
 
             @Override
-            String podName(StatefulSet ss, Integer pod) {
-                return ss.getMetadata().getName() + "-" + pod;
+            protected Future<Pod> pod(StatefulSet ss, Integer pod) {
+                return Future.succeededFuture(new PodBuilder()
+                        .withNewMetadata()
+                        .withNamespace(ss.getMetadata().getNamespace())
+                        .withName(ss.getMetadata().getName() + "-" + pod)
+                        .endMetadata()
+                        .build());
             }
         };
         Async async = context.async();
@@ -235,7 +240,7 @@ public class RollerTest {
                 .withReplicas(5)
                 .endSpec()
                 .build();
-        roller.maybeRollingUpdate(ss).setHandler(ar -> {
+        roller.rollingRestart(ss, null, null, pod -> true).setHandler(ar -> {
             if (ar.failed()) {
                 context.fail(ar.cause());
             } else {
@@ -263,18 +268,17 @@ public class RollerTest {
         List<String> pre = new ArrayList<>();
         List<String> post = new ArrayList<>();
 
-        Roller<Integer, ListContext<Integer>> roller = new Roller<Integer, ListContext<Integer>>(0, po,
-            pod -> true) {
-
-            @Override
-            Future<ListContext<Integer>> context(StatefulSet ss) {
-                return Future.succeededFuture(new ListContext(IntStream.range(0, 5).boxed().collect(Collectors.toList())));
-            }
+        Roller<Integer, ListContext<Integer>> roller = new Roller<Integer, ListContext<Integer>>(0, po) {
 
             int call = 0;
 
             @Override
-            Future<ListContext<Integer>> sort(ListContext<Integer> context) {
+            protected Future<ListContext<Integer>> context(StatefulSet ss, Secret s, Secret s2) {
+                return Future.succeededFuture(new ListContext(IntStream.range(0, 5).boxed().collect(Collectors.toList())));
+            }
+
+            @Override
+            protected Future<ListContext<Integer>> sort(ListContext<Integer> context, Predicate<Pod> restartPod) {
                 if (call++ == 3) {
                     return Future.failedFuture(new RuntimeException("Test exception"));
                 }
@@ -282,26 +286,31 @@ public class RollerTest {
             }
 
             @Override
-            Future<Void> beforeRestart(Pod pod) {
+            protected Future<Void> beforeRestart(Pod pod) {
                 pre.add(pod.getMetadata().getName());
                 return Future.succeededFuture();
             }
 
             @Override
-            Future<Void> afterRestart(Pod pod) {
+            protected Future<Void> afterRestart(Pod pod) {
                 post.add(pod.getMetadata().getName());
                 return Future.succeededFuture();
             }
 
             @Override
-            protected Future<Void> restartPod(StatefulSet ss, Pod pod) {
+            protected Future<Void> restart(StatefulSet ss, Pod pod) {
                 rolled.add(pod.getMetadata().getName());
                 return Future.succeededFuture();
             }
 
             @Override
-            String podName(StatefulSet ss, Integer pod) {
-                return ss.getMetadata().getName() + "-" + pod;
+            protected Future<Pod> pod(StatefulSet ss, Integer pod) {
+                return Future.succeededFuture(new PodBuilder()
+                        .withNewMetadata()
+                        .withNamespace(ss.getMetadata().getNamespace())
+                        .withName(ss.getMetadata().getName() + "-" + pod)
+                        .endMetadata()
+                        .build());
             }
         };
         Async async = context.async();
@@ -314,7 +323,7 @@ public class RollerTest {
                 .withReplicas(5)
                 .endSpec()
                 .build();
-        roller.maybeRollingUpdate(ss).setHandler(ar -> {
+        roller.rollingRestart(ss, null, null, pod -> true).setHandler(ar -> {
             if (ar.failed()) {
                 context.fail(ar.cause());
             } else {

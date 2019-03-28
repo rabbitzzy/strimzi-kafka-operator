@@ -228,8 +228,12 @@ public class KafkaCluster extends AbstractModel {
     }
 
     public static String podDnsName(String namespace, String cluster, int podId) {
+        return podDnsName(namespace, cluster, KafkaCluster.kafkaPodName(cluster, podId));
+    }
+
+    public static String podDnsName(String namespace, String cluster, String podName) {
         return String.format("%s.%s.%s.svc.%s",
-                KafkaCluster.kafkaPodName(cluster, podId),
+                podName,
                 KafkaCluster.headlessServiceName(cluster),
                 namespace,
                 ModelUtils.KUBERNETES_SERVICE_DNS_DOMAIN);

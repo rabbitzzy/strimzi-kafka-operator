@@ -28,7 +28,7 @@ import java.util.stream.Collectors;
 
 import static java.lang.Integer.parseInt;
 
-public class KafkaSorted {
+class KafkaSorted {
 
     private static final Logger log = LogManager.getLogger(KafkaSorted.class.getName());
 
@@ -46,7 +46,6 @@ public class KafkaSorted {
             return describeTopics(names);
         });
     }
-
 
     /**
      * Determine whether the given broker can be rolled without affecting

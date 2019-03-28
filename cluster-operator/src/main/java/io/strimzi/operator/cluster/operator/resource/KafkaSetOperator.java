@@ -30,6 +30,7 @@ import java.util.stream.Collectors;
 public class KafkaSetOperator extends StatefulSetOperator {
 
     private static final Logger log = LogManager.getLogger(KafkaSetOperator.class);
+    private final KafkaRoller kafkaRoller;
 
     /**
      * Constructor
@@ -39,6 +40,7 @@ public class KafkaSetOperator extends StatefulSetOperator {
      */
     public KafkaSetOperator(Vertx vertx, KubernetesClient client, long operationTimeoutMs) {
         super(vertx, client, operationTimeoutMs);
+        this.kafkaRoller = new KafkaRoller(vertx, podOperations, 1_000, operationTimeoutMs);
     }
 
     @Override
@@ -133,10 +135,7 @@ public class KafkaSetOperator extends StatefulSetOperator {
 
     @Override
     public Future<Void> maybeRollingUpdate(StatefulSet ss, Predicate<Pod> podRestart, Secret clusterCaCertSecret, Secret coKeySecret) {
-        return new KafkaRoller(vertx, podOperations, podRestart, 1_000, operationTimeoutMs,
-                clusterCaCertSecret, coKeySecret).maybeRollingUpdate(ss);
+        return kafkaRoller.rollingRestart(ss, clusterCaCertSecret, coKeySecret, podRestart);
     }
-
-
 
 }

@@ -5,6 +5,7 @@
 package io.strimzi.operator.cluster.operator.resource;
 
 import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.apps.StatefulSet;
 import io.strimzi.operator.common.operator.resource.PodOperator;
 import io.vertx.core.Future;
@@ -15,49 +16,43 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 
 /**
- * Abstracted algorithm for rolling the pods of a StatefulSet.
+ * <p>Abstracted algorithm for rolling the pods of a StatefulSet.</p>
  *
- * The algorithm works as follows:
+ * <p>The algorithm works as follows:</p>
  * <pre>
- * 1. Get all pods to be rolled (by applying {@link #context(StatefulSet)}.
- * 2. While there are still pods to roll (i.e. {@link Context#isEmpty()} ()} returns false)
- *    1. {@linkplain #sort(Context) sort the context} and get the first element
- *    2. For this element:
- *      1. Does pod need restart?
- *        1. Is size(collection) &gt; 1 and pod "leader":
- *          1. Add to end of queue
- *        2. Else:
- *          1. Precondition
- *          2. Restart
- *          3. Postcondition
+ * 1. Get a (mutable) context to be passed around during the
+ *    roll (by applying {@link #context(StatefulSet, Secret, Secret)}.
+ *    This context is implementation dependent.
+ * 2. {@link Context#sort(Context, Predicate)} the context. This could,
+ *    for example, influence the order in which pods and rolled and when pods are rolled.
+ * 3. While {@link Context#next()} returns a non-null value:
+ *      a. Precondition
+ *      b. Restart
+ *      c. Postcondition
+ *      d. Continue from step 2.
  * </pre>
+ *
  * @param <P> The class representing pods.
  *           E.g. could be {@code Pod}, or {@code String} (pod name), or {@code Integer} (pod number).
  * @param <C> A context for the roll, passed along during the rolling restart.
  */
-public abstract class Roller<P, C extends Roller.Context<P>> {
+abstract class Roller<P, C extends Roller.Context<P>> {
 
     private final Logger log = LogManager.getLogger(getClass());
 
     private static final String NO_UID = "NULL";
     protected final long operationTimeoutMs;
     protected final PodOperator podOperations;
-    protected final Predicate<Pod> podRestart;
 
-    public Roller(long operationTimeoutMs, PodOperator podOperations,
-                  Predicate<Pod> podRestart) {
+    public Roller(long operationTimeoutMs, PodOperator podOperations) {
         this.operationTimeoutMs = operationTimeoutMs;
         this.podOperations = podOperations;
-        this.podRestart = podRestart;
     }
 
     public interface Context<P> {
 
-        /** @return the next pod to be rolled */
+        /** @return the next pod to be rolled, or null if there are no more pods to roll */
         P next();
-
-        /** @return true iff there more pods to be rolled */
-        boolean isEmpty();
 
         String toString();
     }
@@ -65,24 +60,25 @@ public abstract class Roller<P, C extends Roller.Context<P>> {
     /**
      * Get the rolling context for restarting the pods in the given StatefulSet.
      */
-    abstract Future<C> context(StatefulSet ss);
+    protected abstract Future<C> context(StatefulSet ss,
+                               Secret clusterCaCertSecret, Secret coKeySecret);
 
     /**
      * Sort the context, potentially changing the next pod to be rolled.
      */
-    abstract Future<C> sort(C context);
+    protected abstract Future<C> sort(C context, Predicate<Pod> podRestart);
 
     /**
      * A future which should complete when the given pod is ready to be rolled
      */
-    abstract Future<Void> beforeRestart(Pod pod);
+    protected abstract Future<Void> beforeRestart(Pod pod);
 
     /**
      * A future which should complete when the given pod is "ready" after being rolled.
      */
-    abstract Future<Void> afterRestart(Pod pod);
+    protected abstract Future<Void> afterRestart(Pod pod);
 
-    abstract String podName(StatefulSet ss, P pod);
+    protected abstract Future<Pod> pod(StatefulSet ss, P pod);
 
     private static String getPodUid(Pod resource) {
         if (resource == null || resource.getMetadata() == null) {
@@ -92,9 +88,9 @@ public abstract class Roller<P, C extends Roller.Context<P>> {
     }
 
     /**
-     * Get list of all pods (by applying {@link #context(StatefulSet)}.
+     * Get list of all pods (by applying {@link #context(StatefulSet, Secret, Secret)}.
      * While collection not empty
-     * {@linkplain #sort(Context) sort the collection} and get the first element
+     * {@linkplain #sort(Context, Predicate) sort the collection} and get the first element
      * For this element:
      *   Does pod need restart?
      *   Is size(collection) > 1 and pod "leader":
@@ -104,22 +100,24 @@ public abstract class Roller<P, C extends Roller.Context<P>> {
      *     Restart
      *     Postcondition
      */
-    Future<Void> maybeRollingUpdate(StatefulSet ss) {
-        return context(ss).compose(new Function<C, Future<C>>() {
+    public Future<Void> rollingRestart(StatefulSet ss,
+                                Secret clusterCaCertSecret, Secret coKeySecret, Predicate<Pod> podRestart) {
+        return context(ss, clusterCaCertSecret, coKeySecret).compose(new Function<C, Future<C>>() {
                 @Override
                 public Future<C> apply(C context) {
-                    return sort(context).recover(error -> {
+                    return sort(context, podRestart).recover(error -> {
                         log.warn("Error when determining next pod to roll", error);
                         return Future.succeededFuture(context);
                     }).compose(currentContext -> {
-                        log.debug("Still to maybe roll: {}", currentContext);
                         P pod = context.next();
-                        String podName = podName(ss, pod);
-                        Future<Void> f = maybeRestartPod(ss, podName);
-                        if (context.isEmpty()) {
-                            return f.compose(i -> Future.succeededFuture());
+                        if (pod == null) {
+                            return Future.succeededFuture();
                         } else {
-                            return f.map(i -> currentContext).compose(this);
+                            return pod(ss, pod).compose(p -> {
+                                log.debug("Rolling pod {} (still to consider: {})", p.getMetadata().getName(), currentContext);
+                                Future<Void> f = restartWithCallbacks(ss, p);
+                                return f.map(i -> currentContext).compose(this);
+                            });
                         }
                     });
                 }
@@ -128,45 +126,41 @@ public abstract class Roller<P, C extends Roller.Context<P>> {
 
 
     /**
-     * Asynchronously apply the given {@code podRestart}, if it returns true then restart the pod
-     * given by {@code podName} by deleting it and letting it be recreated by K8s;
-     * in any case return a Future which completes when the given (possibly recreated) pod is ready.
+     * Asynchronously apply the before restart callback, then restart the given pod
+     * by deleting it and letting it be recreated by K8s, then apply the after restart callback.
+     * Return a Future which completes when the after restart callback for the given pod has completed.
      * @param ss The StatefulSet.
-     * @param podName The name of the Pod to possibly restart.
-     * @return a Future which completes when the given (possibly recreated) pod is ready.
+     * @param pod The Pod to restart.
+     * @return a Future which completes when the after restart callback for the given pod has completed.
      */
-    Future<Void> maybeRestartPod(StatefulSet ss, String podName) {
+    private Future<Void> restartWithCallbacks(StatefulSet ss, Pod pod) {
         String namespace = ss.getMetadata().getNamespace();
-        String name = ss.getMetadata().getName();
-        return podOperations.getAsync(ss.getMetadata().getNamespace(), podName).compose(pod -> {
-            Future<Void> fut;
-            log.debug("Testing whether pod {} needs roll", podName);
-            if (podRestart.test(pod)) {
-                log.debug("Precondition on pod {}", podName);
-                fut = beforeRestart(pod).compose(i -> {
-                    log.debug("Rolling pod {}", podName);
-                    return restartPod(ss, pod);
-                }).compose(i -> {
-                    String ssName = podName.substring(0, podName.lastIndexOf('-'));
-                    log.debug("Rolling update of {}/{}: wait for pod {} postcondition", namespace, ssName, podName);
-                    return afterRestart(pod);
-                });
-            } else {
-                log.debug("Rolling update of {}/{}: pod {} no need to roll", namespace, name, podName);
-                fut = Future.succeededFuture();
-            }
-            return fut;
+        //String name = ss.getMetadata().getName();
+        String podName = pod.getMetadata().getName();
+        Future<Void> fut;
+        //log.debug("Testing whether pod {} needs roll", podName);
+        //if (podRestart.test(pod)) {
+        log.debug("Precondition on pod {}", podName);
+        fut = beforeRestart(pod).compose(i -> {
+            log.debug("Rolling pod {}", podName);
+            return restart(ss, pod);
+        }).compose(i -> {
+            String ssName = podName.substring(0, podName.lastIndexOf('-'));
+            log.debug("Rolling update of {}/{}: wait for pod {} postcondition", namespace, ssName, podName);
+            return afterRestart(pod);
         });
+        return fut;
+
     }
 
     /**
      * Asynchronously delete the given pod, return a Future which completes when the Pod has been recreated.
-     * Note: The pod might not be ready when the returned Future completes.
+     * Note: The pod might not be "ready" when the returned Future completes.
      * @param ss The StatefulSet
      * @param pod The pod to be restarted
      * @return a Future which completes when the Pod has been recreated
      */
-    protected Future<Void> restartPod(StatefulSet ss, Pod pod) {
+    protected Future<Void> restart(StatefulSet ss, Pod pod) {
         long pollingIntervalMs = 1_000;
         String namespace = ss.getMetadata().getNamespace();
         String name = ss.getMetadata().getName();
