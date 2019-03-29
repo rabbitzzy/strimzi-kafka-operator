@@ -219,6 +219,12 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
                         result.complete(ar.result());
                     }
                 });
+        } else {
+            if (ar.failed()) {
+                result.fail(ar.cause());
+            } else {
+                result.complete(ar.result());
+            }
         }
     }
 
@@ -255,6 +261,7 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
                             // The first pod in the list needs rolling and is rollable: We're done
                             return Future.succeededFuture(context);
                         } else {
+                            log.debug("Deferring restart of {} (doing so would remove it from ISR, stalling producers with acks=all)", podId);
                             context.pods.add(context.pods.remove(0));
                             return filterAndFindNextRollable(context, podRestart);
                         }
