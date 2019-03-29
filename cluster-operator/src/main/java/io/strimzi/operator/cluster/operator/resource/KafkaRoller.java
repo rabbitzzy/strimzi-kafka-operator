@@ -149,7 +149,7 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
     /**
      * Returns a Future which completes with an AdminClient instance.
      */
-    private Future<AdminClient> adminClient(KafkaRollContext context, Pod pod) {
+    protected Future<AdminClient> adminClient(KafkaRollContext context, Pod pod) {
         String hostname = KafkaCluster.podDnsName(context.namespace, context.cluster, pod.getMetadata().getName()) + ":" + KafkaCluster.REPLICATION_PORT;
         Future<AdminClient> result = Future.future();
         vertx.executeBlocking(
@@ -191,7 +191,7 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
         return result;
     }
 
-    private void close(KafkaRollContext context, Future<KafkaRollContext> result, AsyncResult<KafkaRollContext> ar) {
+    protected void close(KafkaRollContext context, Future<KafkaRollContext> result, AsyncResult<KafkaRollContext> ar) {
         AdminClient ac = context.ac;
         if (ac != null) {
             context.ac = null;
@@ -243,7 +243,7 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
         return controller(context.ac)
             .compose(controller -> {
                 Integer podId = context.pods.get(0);
-                if (podId == controller && context.pods.size() > 1) {
+                if (podId.equals(controller) && context.pods.size() > 1) {
                     // Arrange to do the controller last when there are other brokers to be rolled
                     log.debug("Deferring restart of {} (it's the controller)", podId);
                     context.pods.add(context.pods.remove(0));
@@ -333,15 +333,18 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
     }
 
     private File store(char[] password, KeyStore trustStore) throws Exception {
-        File f = File.createTempFile(getClass().getName(), "ts");
+        File f = null;
         try {
+            f = File.createTempFile(getClass().getName(), "ts");
             f.deleteOnExit();
             try (OutputStream os = new BufferedOutputStream(new FileOutputStream(f))) {
                 trustStore.store(os, password);
             }
             return f;
         } catch (Exception e) {
-            f.delete();
+            if (f != null && !f.delete()) {
+                log.warn("Failed to delete temporary file in exception handler");
+            }
             throw e;
         }
     }
@@ -352,15 +355,19 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
      */
     Future<Integer> controller(AdminClient ac) {
         Future<Integer> result = Future.future();
-        ac.describeCluster().controller().whenComplete((controllerNode, exception) -> {
-            if (exception != null) {
-                result.fail(exception);
-            } else {
-                int id = Node.noNode().equals(controllerNode) ? -1 : controllerNode.id();
-                log.debug("controller is {}", id);
-                result.complete(id);
-            }
-        });
+        try {
+            ac.describeCluster().controller().whenComplete((controllerNode, exception) -> {
+                if (exception != null) {
+                    result.fail(exception);
+                } else {
+                    int id = Node.noNode().equals(controllerNode) ? -1 : controllerNode.id();
+                    log.debug("controller is {}", id);
+                    result.complete(id);
+                }
+            });
+        } catch (Throwable t) {
+            result.fail(t);
+        }
         return result;
     }
 

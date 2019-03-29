@@ -107,14 +107,6 @@ class KafkaSorted {
         }
 
         for (TopicPartitionInfo pi : td.partitions()) {
-//            if (pi.leader() == null
-//                || pi.leader().equals(Node.noNode())) {
-//                if (contains(pi.replicas(), broker)) {
-//                    log.debug("{}/{} has no leader and broker {} has a replica, so avoiding rolling",
-//                            td.name(), pi.partition(), broker);
-//                    return true;
-//                }
-//            } else {
             List<Node> isr = pi.isr();
             if (minIsr >= 0) {
                 if (isr.size() < minIsr) {
@@ -132,7 +124,6 @@ class KafkaSorted {
                     }
                 }
             }
-//            }
         }
         return false;
     }
@@ -179,24 +170,7 @@ class KafkaSorted {
         log.debug("returning");
         return byBroker;
     }
-
-    private Map<Node, List<TopicPartitionInfo>> groupReplicasByBroker(Collection<TopicDescription> tds) {
-        Map<Node, List<TopicPartitionInfo>> byBroker = new HashMap<>();
-        for (TopicDescription td : tds) {
-            for (TopicPartitionInfo pd : td.partitions()) {
-                for (Node broker : pd.replicas()) {
-                    List<TopicPartitionInfo> topicPartitionInfos = byBroker.get(broker);
-                    if (topicPartitionInfos == null) {
-                        topicPartitionInfos = new ArrayList<>();
-                        byBroker.put(broker, topicPartitionInfos);
-                    }
-                    topicPartitionInfos.add(pd);
-                }
-            }
-        }
-        return byBroker;
-    }
-
+    
     private Future<Collection<TopicDescription>> describeTopics(Set<String> names) {
         Future<Collection<TopicDescription>> descFuture = Future.future();
         ac.describeTopics(names).all()
