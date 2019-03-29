@@ -59,14 +59,8 @@ class KafkaSorted {
     private Future<Boolean> canRollBroker(Future<Collection<TopicDescription>> descriptions, int broker) {
         Future<List<TopicDescription>> topicsOnBroker = descriptions
                 .compose(tds -> {
-
                     log.debug("Got {} topic descriptions", tds.size());
-                    try {
-                        return Future.succeededFuture(groupTopicsByBroker(tds).getOrDefault(broker, Collections.emptyList()));
-                    } catch (Throwable t) {
-                        log.debug("wtf", t);
-                        return Future.failedFuture(t);
-                    }
+                    return Future.succeededFuture(groupTopicsByBroker(tds).getOrDefault(broker, Collections.emptyList()));
                 }).recover(error -> {
                     log.warn(error);
                     return Future.failedFuture(error);
@@ -82,12 +76,7 @@ class KafkaSorted {
             Collection<TopicDescription> tds = topicsOnBroker.result();
             Map<String, Config> nameToConfig = x;
             boolean b = tds.stream().noneMatch(
-                td -> {
-                    if (wouldAffectAvailability(broker, nameToConfig, td)) {
-                        return true;
-                    }
-                    return false;
-                });
+                td -> wouldAffectAvailability(broker, nameToConfig, td));
             log.debug("{}", b);
             return b;
         }).recover(error -> {
@@ -155,7 +144,7 @@ class KafkaSorted {
     private Map<Integer, List<TopicDescription>> groupTopicsByBroker(Collection<TopicDescription> tds) {
         Map<Integer, List<TopicDescription>> byBroker = new HashMap<>();
         for (TopicDescription td : tds) {
-            log.debug("{}", td);
+            log.trace("{}", td);
             for (TopicPartitionInfo pd : td.partitions()) {
                 for (Node broker : pd.replicas()) {
                     List<TopicDescription> topicPartitionInfos = byBroker.get(broker.id());
