@@ -249,7 +249,7 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
                     context.pods.add(context.pods.remove(0));
                     return filterAndFindNextRollable(context, podRestart);
                 } else {
-                    KafkaSorted ks = new KafkaSorted(context.ac);
+                    KafkaSorted ks = getKs(context);
                     return ks.canRoll(podId).compose(canRoll -> {
                         if (canRoll) {
                             // The first pod in the list needs rolling and is rollable: We're done
@@ -261,6 +261,10 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
                     });
                 }
             });
+    }
+
+    protected KafkaSorted getKs(KafkaRollContext context) {
+        return new KafkaSorted(context.ac);
     }
 
 
@@ -381,7 +385,11 @@ class KafkaRoller extends Roller<Integer, KafkaRoller.KafkaRollContext> {
     protected Future<Void> afterRestart(Pod pod) {
         String namespace = pod.getMetadata().getNamespace();
         String podName = pod.getMetadata().getName();
-        return podOperations.readiness(namespace, podName, pollingIntervalMs, operationTimeoutMs);
+        return podOperations.readiness(namespace, podName, pollingIntervalMs, operationTimeoutMs)
+            .recover(error -> {
+                log.warn("Error waiting for pod {}/{} to become ready: {}", namespace, podName, error);
+                return Future.failedFuture(error);
+            });
     }
 
     @Override

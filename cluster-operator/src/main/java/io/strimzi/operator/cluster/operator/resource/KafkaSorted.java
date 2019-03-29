@@ -170,8 +170,8 @@ class KafkaSorted {
         log.debug("returning");
         return byBroker;
     }
-    
-    private Future<Collection<TopicDescription>> describeTopics(Set<String> names) {
+
+    protected Future<Collection<TopicDescription>> describeTopics(Set<String> names) {
         Future<Collection<TopicDescription>> descFuture = Future.future();
         ac.describeTopics(names).all()
                 .whenComplete((tds, error) -> {
@@ -185,7 +185,7 @@ class KafkaSorted {
         return descFuture;
     }
 
-    private Future<Set<String>> topicNames() {
+    protected Future<Set<String>> topicNames() {
         Future<Set<String>> namesFuture = Future.future();
         ac.listTopics(new ListTopicsOptions().listInternal(true)).names()
                 .whenComplete((names, error) -> {
