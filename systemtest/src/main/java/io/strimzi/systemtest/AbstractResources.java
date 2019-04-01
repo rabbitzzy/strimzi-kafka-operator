@@ -54,12 +54,12 @@ abstract class AbstractResources {
     }
 
     MixedOperation<Kafka, KafkaList, DoneableKafka, Resource<Kafka, DoneableKafka>> kafka() {
-        return customResourcesWithCascading(Kafka.class, KafkaList.class, DoneableKafka.class);
+        return customResourcesWithCascading();
     }
 
     // This logic is necessary only for the deletion of resources with `cascading: true`
-    <T extends HasMetadata, L extends KubernetesResourceList, D extends Doneable<T>> MixedOperation<T, L, D, Resource<T, D>> customResourcesWithCascading(Class<T> resourceType, Class<L> listClass, Class<D> doneClass) {
-        return new CustomResourceOperationsImpl<T, L, D>(((DefaultKubernetesClient) client()).getHttpClient(), client().getConfiguration(), Crds.kafka().getSpec().getGroup(), Crds.kafka().getSpec().getVersion(), "kafkas", true, client().getNamespace(), null, true, null, null, false, resourceType, listClass, doneClass);
+    <T extends HasMetadata, L extends KubernetesResourceList, D extends Doneable<T>> MixedOperation<T, L, D, Resource<T, D>> customResourcesWithCascading() {
+        return new CustomResourceOperationsImpl<T, L, D>(((DefaultKubernetesClient) client()).getHttpClient(), client().getConfiguration());
     }
 
     MixedOperation<KafkaConnect, KafkaConnectList, DoneableKafkaConnect, Resource<KafkaConnect, DoneableKafkaConnect>> kafkaConnect() {
@@ -93,15 +93,15 @@ abstract class AbstractResources {
     }
 
     MixedOperation<Deployment, DeploymentList, DoneableDeployment, Resource<Deployment, DoneableDeployment>> clusterOperator() {
-        return customResourcesWithCascading(Deployment.class, DeploymentList.class, DoneableDeployment.class);
+        return customResourcesWithCascading();
     }
 
     MixedOperation<ClusterRoleBinding, ClusterRoleBindingList, DoneableClusterRoleBinding, Resource<ClusterRoleBinding, DoneableClusterRoleBinding>> clusterRoleBinding() {
-        return customResourcesWithCascading(ClusterRoleBinding.class, ClusterRoleBindingList.class, DoneableClusterRoleBinding.class);
+        return customResourcesWithCascading();
     }
 
     MixedOperation<RoleBinding, RoleBindingList, DoneableRoleBinding, Resource<RoleBinding, DoneableRoleBinding>> roleBinding() {
-        return customResourcesWithCascading(RoleBinding.class, RoleBindingList.class, DoneableRoleBinding.class);
+        return customResourcesWithCascading();
     }
 
 }
