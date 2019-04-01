@@ -575,7 +575,7 @@ public abstract class AbstractModel {
             .withPort(port)
             .withNewTargetPort(targetPort);
         if (nodePort != null) {
-            builder.withNewNodePort(nodePort);
+            builder.withNodePort(nodePort);
         }
         ServicePort servicePort = builder.build();
         log.trace("Created service port {}", servicePort);
