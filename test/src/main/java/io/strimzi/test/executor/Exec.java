@@ -2,8 +2,9 @@
  * Copyright 2017-2018, Strimzi authors.
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
-package io.strimzi.test.k8s;
+package io.strimzi.test.executor;
 
+import io.strimzi.test.k8s.KubeClusterException;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -21,7 +22,7 @@ import java.util.regex.Pattern;
 import static java.lang.String.join;
 import static java.util.Arrays.asList;
 
-class Exec {
+public class Exec {
     private static final Logger LOGGER = LogManager.getLogger(Exec.class);
     private static final Pattern ERROR_PATTERN = Pattern.compile("Error from server \\(([a-zA-Z0-9]+)\\):");
     private static final Pattern INVALID_PATTERN = Pattern.compile("The ([a-zA-Z0-9]+) \"([a-z0-9.-]+)\" is invalid:");
@@ -31,7 +32,7 @@ class Exec {
      * Executes the given command in a subprocess.
      * @throws KubeClusterException if the process returned a non-zero status code, or if anything else went wrong.
      */
-    static ProcessResult exec(String... cmd) throws KubeClusterException {
+    public static ProcessResult exec(String... cmd) throws KubeClusterException {
         return exec(Arrays.asList(cmd));
     }
 
@@ -39,10 +40,10 @@ class Exec {
      * Executes the given command in a subprocess.
      * @throws KubeClusterException if the process returned a non-zero status code, or if anything else went wrong.
      */
-    static ProcessResult exec(List<String> cmd) throws KubeClusterException {
+    public static ProcessResult exec(List<String> cmd) throws KubeClusterException {
         return exec(null, cmd);
     }
-    static ProcessResult exec(String input, List<String> cmd) throws KubeClusterException {
+    public static ProcessResult exec(String input, List<String> cmd) throws KubeClusterException {
         File out = null;
         File err = null;
         try {
@@ -114,7 +115,7 @@ class Exec {
         }
     }
 
-    static boolean isExecutableOnPath(String cmd) {
+    public static boolean isExecutableOnPath(String cmd) {
         for (String dir : PATH_SPLITTER.split(System.getenv("PATH"))) {
             if (new File(dir, cmd).canExecute()) {
                 return true;

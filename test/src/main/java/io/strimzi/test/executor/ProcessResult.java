@@ -2,7 +2,7 @@
  * Copyright 2018, Strimzi authors.
  * License: Apache License 2.0 (see the file LICENSE or http://apache.org/licenses/LICENSE-2.0.html).
  */
-package io.strimzi.test.k8s;
+package io.strimzi.test.executor;
 
 import java.io.Serializable;
 
@@ -14,7 +14,7 @@ public class ProcessResult implements Serializable {
     private final String out;
     private final String err;
 
-    ProcessResult(int sc, String out, String err) {
+    public ProcessResult(int sc, String out, String err) {
         this.sc = sc;
         this.out = out;
         this.err = err;

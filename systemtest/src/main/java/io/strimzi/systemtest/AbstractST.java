@@ -47,7 +47,7 @@ import io.strimzi.test.TestUtils;
 import io.strimzi.test.TimeoutException;
 import io.strimzi.test.k8s.HelmClient;
 import io.strimzi.test.k8s.KubeClusterException;
-import io.strimzi.test.k8s.ProcessResult;
+import io.strimzi.test.executor.ProcessResult;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.StringReader;

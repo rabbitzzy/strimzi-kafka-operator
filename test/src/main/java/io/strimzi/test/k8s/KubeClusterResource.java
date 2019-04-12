@@ -48,7 +48,7 @@ public class KubeClusterResource {
 
     public KubeClient client() {
         if (bootstrap && client == null) {
-            this.client = KubeClient.findClient(cluster());
+            this.client = cluster().defaultClient();
         }
         return client;
     }
@@ -73,7 +73,7 @@ public class KubeClusterResource {
                 this.cluster = KubeCluster.bootstrap();
             }
             if (client == null) {
-                this.client = KubeClient.findClient(cluster);
+                this.client = cluster.defaultClient();
             }
         }
     }
