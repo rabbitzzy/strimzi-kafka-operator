@@ -20,6 +20,7 @@ import io.fabric8.kubernetes.api.model.rbac.KubernetesClusterRoleBindingBuilder;
 import io.fabric8.kubernetes.api.model.rbac.KubernetesRoleBinding;
 import io.fabric8.kubernetes.api.model.rbac.KubernetesRoleBindingBuilder;
 import io.fabric8.kubernetes.api.model.rbac.KubernetesSubjectBuilder;
+import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.KubernetesClientException;
 import io.fabric8.kubernetes.client.NamespacedKubernetesClient;
 import io.fabric8.kubernetes.client.dsl.MixedOperation;
@@ -72,7 +73,7 @@ public class Resources extends AbstractResources {
     public static final String STRIMZI_DEPLOYMENT_NAME = "strimzi-cluster-operator";
     public static final String STRIMZI_DEFAULT_LOG_LEVEL = "DEBUG";
 
-    Resources(NamespacedKubernetesClient client) {
+    Resources(KubernetesClient client) {
         super(client);
     }
 

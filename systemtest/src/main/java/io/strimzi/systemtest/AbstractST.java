@@ -20,6 +20,7 @@ import io.fabric8.kubernetes.api.model.Quantity;
 import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.client.CustomResource;
 import io.fabric8.kubernetes.client.CustomResourceList;
+import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.NamespacedKubernetesClient;
 import io.fabric8.kubernetes.client.dsl.Resource;
 import io.strimzi.api.kafka.Crds;
@@ -137,10 +138,6 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
     static Resources testClassResources;
     static String operationID;
     Random rng = new Random();
-
-    protected static NamespacedKubernetesClient namespacedClient() {
-        return CLIENT.inNamespace(KUBE_CLIENT.namespace());
-    }
 
     protected HelmClient helmClient() {
         return CLUSTER.helmClient();
@@ -310,10 +307,7 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
     }
 
     List<Event> getEvents(String resourceType, String resourceName) {
-        return CLIENT.events().inNamespace(KUBE_CLIENT.namespace()).list().getItems().stream()
-                .filter(event -> event.getInvolvedObject().getKind().equals(resourceType))
-                .filter(event -> event.getInvolvedObject().getName().equals(resourceName))
-                .collect(Collectors.toList());
+        KUBERNETES.listEvents(resourceType, resourceName);
     }
 
     public void sendMessages(String podName, String clusterName, String topic, int messagesCount) {
@@ -323,7 +317,7 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
 
         LOGGER.info("Command for kafka-verifiable-producer.sh {}", command);
 
-        KUBE_CLIENT.execInPod(podName, "/bin/bash", "-c", command);
+        KUBERNETES.execInPod(podName, "/bin/bash", "-c", command);
     }
 
     public String consumeMessages(String clusterName, String topic, int groupID, int timeout, int kafkaPodID) {
@@ -339,9 +333,9 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
     }
 
     protected void assertResources(String namespace, String podName, String containerName, String memoryLimit, String cpuLimit, String memoryRequest, String cpuRequest) {
-        Pod po = CLIENT.pods().inNamespace(namespace).withName(podName).get();
+        Pod po = KUBERNETES.getPod(podName);
         assertNotNull(po, "Not found an expected pod  " + podName + " in namespace " + namespace + " but found " +
-                CLIENT.pods().inNamespace(namespace).list().getItems().stream().map(p -> p.getMetadata().getName()).collect(Collectors.toList()));
+                KUBERNETES.listPods().stream().map(p -> p.getMetadata().getName()).collect(Collectors.toList()));
 
         Optional optional = po.getSpec().getContainers().stream().filter(c -> c.getName().equals(containerName)).findFirst();
         assertTrue(optional.isPresent(), "Not found an expected container " + containerName);
@@ -434,7 +428,7 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
 
     public Map<String, String> getImagesFromConfig() {
         Map<String, String> images = new HashMap<>();
-        for (Container c : CLIENT.extensions().deployments().inNamespace(KUBE_CLIENT.namespace()).withName("strimzi-cluster-operator").get().getSpec().getTemplate().getSpec().getContainers()) {
+        for (Container c : KUBERNETES.getDeployment("strimzi-cluster-operator").getSpec().getTemplate().getSpec().getContainers()) {
             for (EnvVar envVar : c.getEnv()) {
                 images.put(envVar.getName(), envVar.getValue());
             }
@@ -483,15 +477,6 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
         return TimeMeasuringSystem.startOperation(operation);
     }
 
-    /** Get the log of the pod with the given name */
-    String podLog(String podName) {
-        return namespacedClient().pods().withName(podName).getLog();
-    }
-
-    String podLog(String podName, String containerId) {
-        return namespacedClient().pods().withName(podName).inContainer(containerId).getLog();
-    }
-
     /** Get the name of the pod for a job */
     String jobPodName(Job job) {
         return podNameWithLabels(job.getSpec().getTemplate().getMetadata().getLabels());
@@ -502,7 +487,7 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
     }
 
     String podNameWithLabels(Map<String, String> labels) {
-        List<Pod> pods = namespacedClient().pods().withLabels(labels).list().getItems();
+        List<Pod> pods = KUBERNETES.listPods();
         if (pods.size() != 1) {
             fail("There are " + pods.size() +  " pods with labels " + labels);
         }
@@ -515,7 +500,7 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
      */
     void checkPings(int messagesCount, Job job) {
         String podName = jobPodName(job);
-        String log = podLog(podName);
+        String log = KUBERNETES.logs(podName);
         Matcher m = BRACE_PATTERN.matcher(log);
         boolean producerSuccess = false;
         boolean consumerSuccess = false;
@@ -548,7 +533,7 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
         try {
             LOGGER.debug("Waiting for Job completion: {}", job);
             waitFor("Job completion", GLOBAL_POLL_INTERVAL, GLOBAL_TIMEOUT, () -> {
-                Job jobs = namespacedClient().extensions().jobs().withName(job.getMetadata().getName()).get();
+                Job jobs = KUBERNETES.getJob(job.getMetadata().getName());
                 JobStatus status;
                 if (jobs == null || (status = jobs.getStatus()) == null) {
                     LOGGER.debug("Poll job is null");
@@ -572,22 +557,22 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
         } catch (TimeoutException e) {
             LOGGER.info("Original Job: {}", job);
             try {
-                LOGGER.info("Job: {}", indent(toYamlString(namespacedClient().extensions().jobs().withName(job.getMetadata().getName()).get())));
+                LOGGER.info("Job: {}", indent(toYamlString(KUBERNETES.getJob(job.getMetadata().getName()))));
             } catch (Exception | AssertionError t) {
                 LOGGER.info("Job not available: {}", t.getMessage());
             }
             try {
-                LOGGER.info("Pod: {}", indent(toYamlString(namespacedClient().pods().withName(jobPodName(job)).get())));
+                LOGGER.info("Pod: {}", indent(toYamlString(KUBERNETES.getJob(jobPodName(job)))));
             } catch (Exception | AssertionError t) {
                 LOGGER.info("Pod not available: {}", t.getMessage());
             }
             try {
-                LOGGER.info("Job timeout: Job Pod logs\n----\n{}\n----", indent(podLog(jobPodName(job))));
+                LOGGER.info("Job timeout: Job Pod logs\n----\n{}\n----", indent(KUBERNETES.logs(jobPodName(job))));
             } catch (Exception | AssertionError t) {
                 LOGGER.info("Pod logs not available: {}", t.getMessage());
             }
             try {
-                LOGGER.info("Job timeout: User Operator Pod logs\n----\n{}\n----", indent(podLog(userOperatorPodName(), "user-operator")));
+                LOGGER.info("Job timeout: User Operator Pod logs\n----\n{}\n----", indent(KUBERNETES.logs(userOperatorPodName(), "user-operator")));
             } catch (Exception | AssertionError t) {
                 LOGGER.info("Pod logs not available: {}", t.getMessage());
             }
@@ -596,7 +581,7 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
     }
 
     String saslConfigs(KafkaUser kafkaUser) {
-        Secret secret = namespacedClient().secrets().withName(kafkaUser.getMetadata().getName()).get();
+        Secret secret = KUBERNETES.getSecret(kafkaUser.getMetadata().getName());
 
         String password = new String(Base64.getDecoder().decode(secret.getData().get("password")));
         if (password == null) {
@@ -706,19 +691,19 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
 
         PodSpec producerPodSpec = createPodSpecForProducer(cb, kafkaUser, tlsListener, bootstrapServer).build();
 
-        Job job = resources().deleteLater(namespacedClient().extensions().jobs().create(new JobBuilder()
+        Job job = resources().deleteLater(KUBERNETES.createJob(new JobBuilder()
                 .withNewMetadata()
-                .withName(name)
+                    .withName(name)
                 .endMetadata()
-                .withNewSpec()
-                .withNewTemplate()
-                .withNewMetadata()
-                .withName(name)
-                .addToLabels("job", name)
+                    .withNewSpec()
+                        .withNewTemplate()
+                        .withNewMetadata()
+                        .withName(name)
+                        .addToLabels("job", name)
                 .endMetadata()
-                .withSpec(producerPodSpec)
-                .endTemplate()
-                .endSpec()
+                    .withSpec(producerPodSpec)
+                        .endTemplate()
+                    .endSpec()
                 .build()));
         LOGGER.info("Created Job {}", job);
         return job;
@@ -823,7 +808,7 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
 
         PodSpec consumerPodSpec = createPodSpecForConsumer(cb, kafkaUser, tlsListener, bootstrapServer).build();
 
-        Job job = resources().deleteLater(namespacedClient().extensions().jobs().create(new JobBuilder()
+        Job job = resources().deleteLater(KUBERNETES.createJob(new JobBuilder()
             .withNewMetadata()
                 .withName(name)
             .endMetadata()
@@ -846,7 +831,7 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
      */
     void checkRecordsForConsumer(int messagesCount, Job job) {
         String podName = jobPodName(job);
-        String log = podLog(podName);
+        String log = KUBERNETES.logs(podName);
         Matcher m = BRACE_PATTERN.matcher(log);
         boolean consumerSuccess = false;
         while (m.find()) {
@@ -991,18 +976,18 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
                     .endVolume();
         }
 
-        Job job = resources().deleteLater(namespacedClient().extensions().jobs().create(new JobBuilder()
+        Job job = resources().deleteLater(KUBERNETES.createJob(new JobBuilder()
                 .withNewMetadata()
-                .withName(name)
+                    .withName(name)
                 .endMetadata()
                 .withNewSpec()
-                .withNewTemplate()
-                .withNewMetadata()
-                .withName(name)
-                .addToLabels("job", name)
-                .endMetadata()
+                    .withNewTemplate()
+                    .withNewMetadata()
+                        .withName(name)
+                        .addToLabels("job", name)
+                    .endMetadata()
                 .withSpec(podSpecBuilder.withContainers(cb.build()).build())
-                .endTemplate()
+                    .endTemplate()
                 .endSpec()
                 .build()));
         LOGGER.info("Created Job {}", job);
@@ -1016,20 +1001,20 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
                 TEST_LOG_DIR + testClass + "." + testName + "_" + currentDate
                 : TEST_LOG_DIR + currentDate;
 
-        LogCollector logCollector = new LogCollector(CLIENT.inNamespace(KUBE_CLIENT.namespace()), new File(logDir));
+        LogCollector logCollector = new LogCollector(KUBERNETES.getClient(), new File(logDir));
         logCollector.collectEvents();
         logCollector.collectConfigMaps();
         logCollector.collectLogsFromPods();
     }
 
     private class LogCollector {
-        NamespacedKubernetesClient client;
+        KubernetesClient client;
         String namespace;
         File logDir;
         File configMapDir;
         File eventsDir;
 
-        private LogCollector(NamespacedKubernetesClient client, File logDir) {
+        private LogCollector(KubernetesClient client, File logDir) {
             this.client = client;
             this.namespace = client.getNamespace();
             this.logDir = logDir;
@@ -1079,19 +1064,12 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
 
     void waitTillSecretExists(String secretName) {
         waitFor("secret " + secretName + " exists", GLOBAL_POLL_INTERVAL, GLOBAL_TIMEOUT,
-            () -> namespacedClient().secrets().withName(secretName).get() != null);
+            () -> KUBERNETES.getSecret(secretName) != null);
         try {
             Thread.sleep(60000L);
         } catch (InterruptedException e) {
             e.printStackTrace();
         }
-    }
-
-    void waitForPodDeletion(String namespace, String podName) {
-        LOGGER.info("Waiting when Pod {} will be deleted", podName);
-
-        TestUtils.waitFor("statefulset " + podName, GLOBAL_POLL_INTERVAL, GLOBAL_TIMEOUT,
-            () -> CLIENT.pods().inNamespace(namespace).withName(podName).get() == null);
     }
 
     /**
@@ -1103,12 +1081,12 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
     void waitForDeletion(long time, String namespace) throws Exception {
         LOGGER.info("Wait for {} ms after cleanup to make sure everything is deleted", time);
         Thread.sleep(time);
-        long podCount = CLIENT.pods().inNamespace(namespace).list().getItems().stream().filter(
+        long podCount = KUBERNETES.listPods().stream().filter(
             p -> !p.getMetadata().getName().startsWith(CLUSTER_OPERATOR_PREFIX)).count();
 
         StringBuilder nonTerminated = new StringBuilder();
         if (podCount > 0) {
-            List<Pod> pods = CLIENT.pods().inNamespace(namespace).list().getItems().stream().filter(
+            List<Pod> pods = KUBERNETES.listPods().stream().filter(
                 p -> !p.getMetadata().getName().startsWith(CLUSTER_OPERATOR_PREFIX)).collect(Collectors.toList());
             pods.forEach(
                 p -> nonTerminated.append("\n").append(p.getMetadata().getName()).append(" - ").append(p.getStatus().getPhase())
@@ -1131,7 +1109,7 @@ public abstract class AbstractST extends BaseITST implements TestSeparator {
         createNamespaces(coNamespace, bindingsNamespaces);
         applyClusterOperatorInstallFiles();
 
-        testClassResources = new Resources(namespacedClient());
+        testClassResources = new Resources(KUBERNETES.getClient());
 
         applyRoleBindings(coNamespace, bindingsNamespaces);
         // 050-Deployment
