@@ -103,10 +103,10 @@ public class TopicOperatorIT extends BaseITST {
 
     @BeforeClass
     public static void setupKubeCluster() {
-        CLUSTER.client().clientWithAdmin()
+        CLUSTER.cmdClient().clientWithAdmin()
                 .createNamespace(NAMESPACE);
-        oldNamespace = CLUSTER.client().namespace(NAMESPACE);
-        CLUSTER.client().clientWithAdmin()
+        oldNamespace = CLUSTER.cmdClient().namespace(NAMESPACE);
+        CLUSTER.cmdClient().clientWithAdmin()
                 .create("../install/topic-operator/02-Role-strimzi-topic-operator.yaml")
                 .create(TestUtils.CRD_TOPIC)
                 .create("src/test/resources/TopicOperatorIT-rbac.yaml");
@@ -114,12 +114,12 @@ public class TopicOperatorIT extends BaseITST {
 
     @AfterClass
     public static void teardownKubeCluster() {
-        CLUSTER.client().clientWithAdmin()
+        CLUSTER.cmdClient().clientWithAdmin()
                 .delete("src/test/resources/TopicOperatorIT-rbac.yaml")
                 .delete(TestUtils.CRD_TOPIC)
                 .delete("../install/topic-operator/02-Role-strimzi-topic-operator.yaml")
                 .deleteNamespace(NAMESPACE);
-        CLUSTER.client().clientWithAdmin().namespace(oldNamespace);
+        CLUSTER.cmdClient().clientWithAdmin().namespace(oldNamespace);
     }
 
     @Before
@@ -145,7 +145,7 @@ public class TopicOperatorIT extends BaseITST {
             }
         } while (true);
 
-        kubeClient = CLIENT.inNamespace(NAMESPACE);
+        kubeClient = KUBERNETES.getClient(); //TODO check namespce
         Crds.registerCustomKinds();
         LOGGER.info("Using namespace {}", NAMESPACE);
         Map<String, String> m = new HashMap();
