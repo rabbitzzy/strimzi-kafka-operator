@@ -4,7 +4,10 @@
  */
 package io.strimzi.systemtest;
 
+import io.strimzi.api.kafka.Crds;
 import io.strimzi.api.kafka.model.KafkaUser;
+import io.strimzi.systemtest.utils.StUtils;
+import io.strimzi.test.TestUtils;
 import io.strimzi.test.extensions.StrimziExtension;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -49,16 +52,17 @@ class UserST extends AbstractST {
             .endSpec().build()).done();
 
         KafkaUser user = resources().tlsUser(CLUSTER_NAME, kafkaUser).done();
-        KUBE_CLIENT.waitForResourceCreation("secret", kafkaUser);
+        StUtils.waitForSecretReady(kafkaUser);
 
-        String kafkaUserSecret = KUBE_CLIENT.getResourceAsJson("secret", kafkaUser);
+        String kafkaUserSecret = TestUtils.toJsonString(KUBE_CLIENT.getSecret(kafkaUser));
         assertThat(kafkaUserSecret, hasJsonPath("$.data['ca.crt']", notNullValue()));
         assertThat(kafkaUserSecret, hasJsonPath("$.data['user.crt']", notNullValue()));
         assertThat(kafkaUserSecret, hasJsonPath("$.data['user.key']", notNullValue()));
         assertThat(kafkaUserSecret, hasJsonPath("$.metadata.name", equalTo(kafkaUser)));
         assertThat(kafkaUserSecret, hasJsonPath("$.metadata.namespace", equalTo(NAMESPACE)));
 
-        String kafkaUserAsJson = KUBE_CLIENT.getResourceAsJson("KafkaUser", kafkaUser);
+        KafkaUser kUser = Crds.kafkaUserOperation(KUBE_CLIENT.getClient()).inNamespace(KUBE_CLIENT.getNamespace()).withName(kafkaUser).get();
+        String kafkaUserAsJson = TestUtils.toJsonString(kUser);
 
         assertThat(kafkaUserAsJson, hasJsonPath("$.metadata.name", equalTo(kafkaUser)));
         assertThat(kafkaUserAsJson, hasJsonPath("$.metadata.namespace", equalTo(NAMESPACE)));
@@ -76,16 +80,18 @@ class UserST extends AbstractST {
                 .endKafkaUserScramSha512ClientAuthentication()
             .endSpec().done();
 
-        kafkaUserSecret = KUBE_CLIENT.getResourceAsJson("secret", kafkaUser);
+        StUtils.waitForSecretReady(kafkaUser);
+        kafkaUserSecret = TestUtils.toJsonString(KUBE_CLIENT.getSecret(kafkaUser));
         assertThat(kafkaUserSecret, hasJsonPath("$.data.password", notNullValue()));
 
-        kafkaUserAsJson = KUBE_CLIENT.getResourceAsJson("KafkaUser", kafkaUser);
+        kUser = Crds.kafkaUserOperation(KUBE_CLIENT.getClient()).inNamespace(KUBE_CLIENT.getNamespace()).withName(kafkaUser).get();
+        kafkaUserAsJson = TestUtils.toJsonString(kUser);
         assertThat(kafkaUserAsJson, hasJsonPath("$.metadata.name", equalTo(kafkaUser)));
         assertThat(kafkaUserAsJson, hasJsonPath("$.metadata.namespace", equalTo(NAMESPACE)));
         assertThat(kafkaUserAsJson, hasJsonPath("$.spec.authentication.type", equalTo("scram-sha-512")));
 
-        KUBE_CLIENT.deleteByName("KafkaUser", kafkaUser);
-        KUBE_CLIENT.waitForResourceDeletion("KafkaUser", kafkaUser);
+        Crds.kafkaUserOperation(KUBE_CLIENT.getClient()).inNamespace(KUBE_CLIENT.getNamespace()).delete(kUser);
+        StUtils.waitForKafkaUserDeletion(kafkaUser);
     }
 
     @BeforeEach

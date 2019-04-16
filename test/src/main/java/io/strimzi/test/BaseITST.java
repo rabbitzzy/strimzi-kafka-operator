@@ -35,10 +35,10 @@ public class BaseITST {
 
     public static final KubeClusterResource CLUSTER = new KubeClusterResource();
 
-    public static final KubeClient<?> KUBE_CLIENT = CLUSTER.cmdClient();
-    public static final Kubernetes KUBERNETES = CLUSTER.client();
+    public static final KubeClient<?> KUBE_CMD_CLIENT = CLUSTER.cmdClient();
+    public static final Kubernetes KUBE_CLIENT = CLUSTER.client();
 
-    private static final String DEFAULT_NAMESPACE = KUBE_CLIENT.defaultNamespace();
+    private static final String DEFAULT_NAMESPACE = CLUSTER.cmdClient().defaultNamespace();
 
     protected String clusterOperatorNamespace = DEFAULT_NAMESPACE;
     protected List<String> bindingsNamespaces = new ArrayList<>();
@@ -62,7 +62,7 @@ public class BaseITST {
         for (Map.Entry<File, String> entry : operatorFiles.entrySet()) {
             LOGGER.info("Applying configuration file: {}", entry.getKey());
             clusterOperatorConfigs.push(entry.getValue());
-            KUBE_CLIENT.clientWithAdmin().applyContent(entry.getValue());
+            KUBE_CMD_CLIENT.clientWithAdmin().applyContent(entry.getValue());
         }
         TimeMeasuringSystem.stopOperation(Operation.CO_CREATION);
     }
@@ -75,7 +75,7 @@ public class BaseITST {
         TimeMeasuringSystem.startOperation(Operation.CO_DELETION);
 
         while (!clusterOperatorConfigs.empty()) {
-            KUBE_CLIENT.clientWithAdmin().deleteContent(clusterOperatorConfigs.pop());
+            KUBE_CMD_CLIENT.clientWithAdmin().deleteContent(clusterOperatorConfigs.pop());
         }
         TimeMeasuringSystem.stopOperation(Operation.CO_DELETION);
     }
@@ -90,12 +90,12 @@ public class BaseITST {
         for (String namespace: namespaces) {
             LOGGER.info("Creating namespace: {}", namespace);
             deploymentNamespaces.add(namespace);
-            KUBE_CLIENT.createNamespace(namespace);
-            KUBE_CLIENT.waitForResourceCreation("Namespace", namespace);
+            KUBE_CMD_CLIENT.createNamespace(namespace);
+            KUBE_CMD_CLIENT.waitForResourceCreation("Namespace", namespace);
         }
         clusterOperatorNamespace = useNamespace;
         LOGGER.info("Using namespace {}", useNamespace);
-        KUBE_CLIENT.namespace(useNamespace);
+        KUBE_CMD_CLIENT.namespace(useNamespace);
     }
 
     /**
@@ -114,12 +114,12 @@ public class BaseITST {
         Collections.reverse(deploymentNamespaces);
         for (String namespace: deploymentNamespaces) {
             LOGGER.info("Deleting namespace: {}", namespace);
-            KUBE_CLIENT.deleteNamespace(namespace);
-            KUBE_CLIENT.waitForResourceDeletion("Namespace", namespace);
+            KUBE_CMD_CLIENT.deleteNamespace(namespace);
+            KUBE_CMD_CLIENT.waitForResourceDeletion("Namespace", namespace);
         }
         deploymentNamespaces.clear();
         LOGGER.info("Using namespace {}", CLUSTER.defaultNamespace());
-        KUBE_CLIENT.namespace(CLUSTER.defaultNamespace());
+        KUBE_CMD_CLIENT.namespace(CLUSTER.defaultNamespace());
     }
 
     /**
@@ -131,7 +131,7 @@ public class BaseITST {
         for (String resource : resources) {
             LOGGER.info("Creating resources {}", resource);
             deploymentResources.add(resource);
-            KUBE_CLIENT.clientWithAdmin().create(resource);
+            KUBE_CMD_CLIENT.clientWithAdmin().create(resource);
         }
     }
 
@@ -142,7 +142,7 @@ public class BaseITST {
         Collections.reverse(deploymentResources);
         for (String resource : deploymentResources) {
             LOGGER.info("Deleting resources {}", resource);
-            KUBE_CLIENT.delete(resource);
+            KUBE_CMD_CLIENT.delete(resource);
         }
         deploymentResources.clear();
     }
@@ -153,7 +153,7 @@ public class BaseITST {
     protected void deleteCustomResources(String... resources) {
         for (String resource : resources) {
             LOGGER.info("Deleting resources {}", resource);
-            KUBE_CLIENT.delete(resource);
+            KUBE_CMD_CLIENT.delete(resource);
             deploymentResources.remove(resource);
         }
     }

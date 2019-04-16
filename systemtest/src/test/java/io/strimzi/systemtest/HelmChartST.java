@@ -4,6 +4,7 @@
  */
 package io.strimzi.systemtest;
 
+import io.strimzi.systemtest.utils.StUtils;
 import io.strimzi.test.extensions.StrimziExtension;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -33,8 +34,8 @@ class HelmChartST extends AbstractST {
     void testDeployKafkaClusterViaHelmChart() {
         resources().kafkaEphemeral(CLUSTER_NAME, 3).done();
         resources().topic(CLUSTER_NAME, TOPIC_NAME).done();
-        KUBE_CLIENT.waitForStatefulSet(zookeeperClusterName(CLUSTER_NAME), 3);
-        KUBE_CLIENT.waitForStatefulSet(kafkaClusterName(CLUSTER_NAME), 3);
+        StUtils.waitForAllStatefulSetPodsReady(zookeeperClusterName(CLUSTER_NAME));
+        StUtils.waitForAllStatefulSetPodsReady(kafkaClusterName(CLUSTER_NAME));
     }
 
     @BeforeEach

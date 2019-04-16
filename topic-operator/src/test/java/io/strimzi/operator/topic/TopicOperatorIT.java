@@ -145,7 +145,7 @@ public class TopicOperatorIT extends BaseITST {
             }
         } while (true);
 
-        kubeClient = KUBERNETES.getClient(); //TODO check namespce
+        kubeClient = KUBE_CLIENT.getClient(); //TODO check namespce
         Crds.registerCustomKinds();
         LOGGER.info("Using namespace {}", NAMESPACE);
         Map<String, String> m = new HashMap();

@@ -37,11 +37,11 @@ public class StrimziUpgradeST extends AbstractST {
     private void copyModifyApply(File root) {
         Arrays.stream(root.listFiles()).sorted().forEach(f -> {
             if (f.getName().matches(".*RoleBinding.*")) {
-                KUBE_CLIENT.applyContent(TestUtils.changeRoleBindingSubject(f, NAMESPACE));
+                KUBE_CMD_CLIENT.applyContent(TestUtils.changeRoleBindingSubject(f, NAMESPACE));
             } else if (f.getName().matches("050-Deployment.*")) {
-                KUBE_CLIENT.applyContent(TestUtils.changeDeploymentNamespaceUpgrade(f, NAMESPACE));
+                KUBE_CMD_CLIENT.applyContent(TestUtils.changeDeploymentNamespaceUpgrade(f, NAMESPACE));
             } else {
-                KUBE_CLIENT.apply(f);
+                KUBE_CMD_CLIENT.apply(f);
             }
         });
     }
@@ -49,16 +49,16 @@ public class StrimziUpgradeST extends AbstractST {
     private void deleteInstalledYamls(File root) {
         Arrays.stream(root.listFiles()).sorted().forEach(f -> {
             if (f.getName().matches(".*RoleBinding.*")) {
-                KUBE_CLIENT.deleteContent(TestUtils.changeRoleBindingSubject(f, NAMESPACE));
+                KUBE_CMD_CLIENT.deleteContent(TestUtils.changeRoleBindingSubject(f, NAMESPACE));
             } else {
-                KUBE_CLIENT.delete(f);
+                KUBE_CMD_CLIENT.delete(f);
             }
         });
     }
 
     @Test
     void upgrade_0_8_2_to_HEAD() throws IOException {
-        KUBE_CLIENT.namespace(NAMESPACE);
+        KUBE_CMD_CLIENT.namespace(NAMESPACE);
         File coDir = null;
         File kafkaEphemeralYaml = null;
         File kafkaTopicYaml = null;
@@ -74,31 +74,31 @@ public class StrimziUpgradeST extends AbstractST {
             copyModifyApply(coDir);
 
             LOGGER.info("Waiting for CO deployment");
-            KUBE_CLIENT.waitForDeployment("strimzi-cluster-operator", 1);
+            StUtils.waitForDeploymentReady("strimzi-cluster-operator");
 
             // Deploy a 0.8.2. Kafka cluster
             kafkaEphemeralYaml = new File(dir, "strimzi-0.8.2/examples/kafka/kafka-ephemeral.yaml");
-            KUBE_CLIENT.create(kafkaEphemeralYaml);
+            KUBE_CMD_CLIENT.create(kafkaEphemeralYaml);
             // Wait for readiness
             LOGGER.info("Waiting for Zookeeper StatefulSet");
-            KUBE_CLIENT.waitForStatefulSet("my-cluster-zookeeper", 3);
+            StUtils.waitForAllStatefulSetPodsReady("my-cluster-zookeeper");
             LOGGER.info("Waiting for Kafka StatefulSet");
-            KUBE_CLIENT.waitForStatefulSet("my-cluster-kafka", 3);
+            StUtils.waitForAllStatefulSetPodsReady("my-cluster-kafka");
             LOGGER.info("Waiting for EO Deployment");
-            KUBE_CLIENT.waitForDeployment("my-cluster-entity-operator", 1);
+            StUtils.waitForDeploymentReady("my-cluster-entity-operator");
 
             // And a topic and a user
             kafkaTopicYaml = new File(dir, "strimzi-0.8.2/examples/topic/kafka-topic.yaml");
-            KUBE_CLIENT.create(kafkaTopicYaml);
+            KUBE_CMD_CLIENT.create(kafkaTopicYaml);
             kafkaUserYaml = new File(dir, "strimzi-0.8.2/examples/user/kafka-user.yaml");
-            KUBE_CLIENT.create(kafkaUserYaml);
+            KUBE_CMD_CLIENT.create(kafkaUserYaml);
 
             String zkSsName = KafkaResources.zookeeperStatefulSetName("my-cluster");
             String kafkaSsName = KafkaResources.kafkaStatefulSetName("my-cluster");
             String eoDepName = KafkaResources.entityOperatorDeploymentName("my-cluster");
-            Map<String, String> zkPods = StUtils.ssSnapshot(CLIENT, NAMESPACE, zkSsName);
-            Map<String, String> kafkaPods = StUtils.ssSnapshot(CLIENT, NAMESPACE, kafkaSsName);
-            Map<String, String> eoPods = StUtils.depSnapshot(CLIENT, NAMESPACE, eoDepName);
+            Map<String, String> zkPods = StUtils.ssSnapshot(NAMESPACE, zkSsName);
+            Map<String, String> kafkaPods = StUtils.ssSnapshot(NAMESPACE, kafkaSsName);
+            Map<String, String> eoPods = StUtils.depSnapshot(NAMESPACE, eoDepName);
 
             List<Pod> pods = CLIENT.pods().inNamespace(NAMESPACE).withLabels(CLIENT.apps().statefulSets().inNamespace(NAMESPACE).withName(zkSsName).get().getSpec().getSelector().getMatchLabels()).list().getItems();
             for (Pod pod : pods) {
@@ -109,21 +109,21 @@ public class StrimziUpgradeST extends AbstractST {
             LOGGER.info("Updating");
             copyModifyApply(new File("../install/cluster-operator"));
             LOGGER.info("Waiting for CO redeployment");
-            KUBE_CLIENT.waitForDeployment("strimzi-cluster-operator", 1);
+            StUtils.waitForDeploymentReady("strimzi-cluster-operator");
 
             LOGGER.info("Waiting for ZK SS roll");
-            StUtils.waitTillSsHasRolled(CLIENT, NAMESPACE, zkSsName, zkPods);
+            StUtils.waitTillSsHasRolled(NAMESPACE, zkSsName, zkPods);
             LOGGER.info("Checking ZK pods using new image");
             waitTillAllPodsUseImage(CLIENT.apps().statefulSets().inNamespace(NAMESPACE).withName(zkSsName).get().getSpec().getSelector().getMatchLabels(),
                     "strimzi/zookeeper:latest-kafka-2.0.0");
             LOGGER.info("Waiting for Kafka SS roll");
-            StUtils.waitTillSsHasRolled(CLIENT, NAMESPACE, kafkaSsName, kafkaPods);
+            StUtils.waitTillSsHasRolled(NAMESPACE, kafkaSsName, kafkaPods);
             LOGGER.info("Checking Kafka pods using new image");
             waitTillAllPodsUseImage(CLIENT.apps().statefulSets().inNamespace(NAMESPACE).withName(kafkaSsName).get().getSpec().getSelector().getMatchLabels(),
                     "strimzi/kafka:latest-kafka-2.1.0");
             LOGGER.info("Waiting for EO Dep roll");
             // Check the TO and UO also got upgraded
-            StUtils.waitTillDepHasRolled(CLIENT, NAMESPACE, eoDepName, eoPods);
+            StUtils.waitTillDepHasRolled(NAMESPACE, eoDepName, eoPods);
             LOGGER.info("Checking EO pod using new image");
             waitTillAllContainersUseImage(
                     CLIENT.apps().deployments().inNamespace(NAMESPACE).withName(eoDepName).get().getSpec().getSelector().getMatchLabels(),
@@ -138,10 +138,10 @@ public class StrimziUpgradeST extends AbstractST {
             // Tidy up
         } catch (KubeClusterException e) {
             if (kafkaEphemeralYaml != null) {
-                KUBE_CLIENT.delete(kafkaEphemeralYaml);
+                KUBE_CMD_CLIENT.delete(kafkaEphemeralYaml);
             }
             if (coDir != null) {
-                KUBE_CLIENT.delete(coDir);
+                KUBE_CMD_CLIENT.delete(coDir);
             }
             throw e;
         } finally {
