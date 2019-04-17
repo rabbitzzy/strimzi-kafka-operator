@@ -50,6 +50,6 @@ function build {
     done
 }
 
-load_checksums
+# load_checksums
 build $@
 

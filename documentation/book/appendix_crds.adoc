@@ -958,8 +958,8 @@ Used in: xref:type-KafkaConnect-{context}[`KafkaConnect`]
 |map
 |template               1.2+<.<|Template for Kafka Connect and Kafka Connect S2I resources. The template allows users to specify how is the `Deployment`, `Pods` and `Service` generated.
 |xref:type-KafkaConnectTemplate-{context}[`KafkaConnectTemplate`]
-|authentication         1.2+<.<|Authentication configuration for Kafka Connect. The type depends on the value of the `authentication.type` property within the given object, which must be one of [tls, scram-sha-512].
-|xref:type-KafkaConnectAuthenticationTls-{context}[`KafkaConnectAuthenticationTls`], xref:type-KafkaConnectAuthenticationScramSha512-{context}[`KafkaConnectAuthenticationScramSha512`]
+|authentication         1.2+<.<|Authentication configuration for Kafka Connect. The type depends on the value of the `authentication.type` property within the given object, which must be one of [tls, scram-sha-512, sasl-plain].
+|xref:type-KafkaConnectAuthenticationTls-{context}[`KafkaConnectAuthenticationTls`], xref:type-KafkaConnectAuthenticationScramSha512-{context}[`KafkaConnectAuthenticationScramSha512`], xref:type-KafkaConnectAuthenticationSaslPlain-{context}[`KafkaConnectAuthenticationSaslPlain`]
 |bootstrapServers       1.2+<.<|Bootstrap servers to connect to. This should be given as a comma separated list of _<hostname>_:‍_<port>_ pairs.
 |string
 |config                 1.2+<.<|The Kafka Connect configuration. Properties with the following prefixes cannot be set: ssl., sasl., security., listeners, plugin.path, rest., bootstrap.servers.
@@ -999,7 +999,7 @@ Used in: xref:type-KafkaConnectS2ISpec-{context}[`KafkaConnectS2ISpec`], xref:ty
 Used in: xref:type-KafkaConnectS2ISpec-{context}[`KafkaConnectS2ISpec`], xref:type-KafkaConnectSpec-{context}[`KafkaConnectSpec`]
 
 
-The `type` property is a discriminator that distinguishes the use of the type `KafkaConnectAuthenticationTls` from xref:type-KafkaConnectAuthenticationScramSha512-{context}[`KafkaConnectAuthenticationScramSha512`].
+The `type` property is a discriminator that distinguishes the use of the type `KafkaConnectAuthenticationTls` from xref:type-KafkaConnectAuthenticationScramSha512-{context}[`KafkaConnectAuthenticationScramSha512`], xref:type-KafkaConnectAuthenticationSaslPlain-{context}[`KafkaConnectAuthenticationSaslPlain`].
 It must have the value `tls` for the type `KafkaConnectAuthenticationTls`.
 [options="header"]
 |====
@@ -1033,7 +1033,7 @@ Used in: xref:type-KafkaConnectAuthenticationTls-{context}[`KafkaConnectAuthenti
 Used in: xref:type-KafkaConnectS2ISpec-{context}[`KafkaConnectS2ISpec`], xref:type-KafkaConnectSpec-{context}[`KafkaConnectSpec`]
 
 
-The `type` property is a discriminator that distinguishes the use of the type `KafkaConnectAuthenticationScramSha512` from xref:type-KafkaConnectAuthenticationTls-{context}[`KafkaConnectAuthenticationTls`].
+The `type` property is a discriminator that distinguishes the use of the type `KafkaConnectAuthenticationScramSha512` from xref:type-KafkaConnectAuthenticationTls-{context}[`KafkaConnectAuthenticationTls`], xref:type-KafkaConnectAuthenticationSaslPlain-{context}[`KafkaConnectAuthenticationSaslPlain`].
 It must have the value `scram-sha-512` for the type `KafkaConnectAuthenticationScramSha512`.
 [options="header"]
 |====
@@ -1058,6 +1058,25 @@ Used in: xref:type-KafkaConnectAuthenticationScramSha512-{context}[`KafkaConnect
 |password    1.2+<.<|The name of the key in the Secret under which the password is stored.
 |string
 |secretName  1.2+<.<|The name of the Secret containing the password.
+|string
+|====
+
+[id='type-KafkaConnectAuthenticationSaslPlain-{context}']
+### `KafkaConnectAuthenticationSaslPlain` schema reference
+
+Used in: xref:type-KafkaConnectS2ISpec-{context}[`KafkaConnectS2ISpec`], xref:type-KafkaConnectSpec-{context}[`KafkaConnectSpec`]
+
+
+The `type` property is a discriminator that distinguishes the use of the type `KafkaConnectAuthenticationSaslPlain` from xref:type-KafkaConnectAuthenticationTls-{context}[`KafkaConnectAuthenticationTls`], xref:type-KafkaConnectAuthenticationScramSha512-{context}[`KafkaConnectAuthenticationScramSha512`].
+It must have the value `sasl-plain` for the type `KafkaConnectAuthenticationSaslPlain`.
+[options="header"]
+|====
+|Field            |Description
+|password  1.2+<.<|Password used for the authentication.
+|string
+|type      1.2+<.<|Must be `sasl-plain`.
+|string
+|username  1.2+<.<|Username used for the authentication.
 |string
 |====
 
@@ -1199,8 +1218,8 @@ Used in: xref:type-KafkaConnectS2I-{context}[`KafkaConnectS2I`]
 |map
 |template                  1.2+<.<|Template for Kafka Connect and Kafka Connect S2I resources. The template allows users to specify how is the `Deployment`, `Pods` and `Service` generated.
 |xref:type-KafkaConnectTemplate-{context}[`KafkaConnectTemplate`]
-|authentication            1.2+<.<|Authentication configuration for Kafka Connect. The type depends on the value of the `authentication.type` property within the given object, which must be one of [tls, scram-sha-512].
-|xref:type-KafkaConnectAuthenticationTls-{context}[`KafkaConnectAuthenticationTls`], xref:type-KafkaConnectAuthenticationScramSha512-{context}[`KafkaConnectAuthenticationScramSha512`]
+|authentication            1.2+<.<|Authentication configuration for Kafka Connect. The type depends on the value of the `authentication.type` property within the given object, which must be one of [tls, scram-sha-512, sasl-plain].
+|xref:type-KafkaConnectAuthenticationTls-{context}[`KafkaConnectAuthenticationTls`], xref:type-KafkaConnectAuthenticationScramSha512-{context}[`KafkaConnectAuthenticationScramSha512`], xref:type-KafkaConnectAuthenticationSaslPlain-{context}[`KafkaConnectAuthenticationSaslPlain`]
 |bootstrapServers          1.2+<.<|Bootstrap servers to connect to. This should be given as a comma separated list of _<hostname>_:‍_<port>_ pairs.
 |string
 |config                    1.2+<.<|The Kafka Connect configuration. Properties with the following prefixes cannot be set: ssl., sasl., security., listeners, plugin.path, rest., bootstrap.servers.
@@ -1271,8 +1290,8 @@ Used in: xref:type-KafkaUser-{context}[`KafkaUser`]
 [options="header"]
 |====
 |Field                  |Description
-|authentication  1.2+<.<|Authentication mechanism enabled for this Kafka user. The type depends on the value of the `authentication.type` property within the given object, which must be one of [tls, scram-sha-512].
-|xref:type-KafkaUserTlsClientAuthentication-{context}[`KafkaUserTlsClientAuthentication`], xref:type-KafkaUserScramSha512ClientAuthentication-{context}[`KafkaUserScramSha512ClientAuthentication`]
+|authentication  1.2+<.<|Authentication mechanism enabled for this Kafka user. The type depends on the value of the `authentication.type` property within the given object, which must be one of [tls, scram-sha-512, sasl-plain].
+|xref:type-KafkaUserTlsClientAuthentication-{context}[`KafkaUserTlsClientAuthentication`], xref:type-KafkaUserScramSha512ClientAuthentication-{context}[`KafkaUserScramSha512ClientAuthentication`], xref:type-KafkaUserSaslPlainClientAuthentication-{context}[`KafkaUserSaslPlainClientAuthentication`]
 |authorization   1.2+<.<|Authorization rules for this Kafka user. The type depends on the value of the `authorization.type` property within the given object, which must be one of [simple].
 |xref:type-KafkaUserAuthorizationSimple-{context}[`KafkaUserAuthorizationSimple`]
 |====
@@ -1283,7 +1302,7 @@ Used in: xref:type-KafkaUser-{context}[`KafkaUser`]
 Used in: xref:type-KafkaUserSpec-{context}[`KafkaUserSpec`]
 
 
-The `type` property is a discriminator that distinguishes the use of the type `KafkaUserTlsClientAuthentication` from xref:type-KafkaUserScramSha512ClientAuthentication-{context}[`KafkaUserScramSha512ClientAuthentication`].
+The `type` property is a discriminator that distinguishes the use of the type `KafkaUserTlsClientAuthentication` from xref:type-KafkaUserScramSha512ClientAuthentication-{context}[`KafkaUserScramSha512ClientAuthentication`], xref:type-KafkaUserSaslPlainClientAuthentication-{context}[`KafkaUserSaslPlainClientAuthentication`].
 It must have the value `tls` for the type `KafkaUserTlsClientAuthentication`.
 [options="header"]
 |====
@@ -1298,12 +1317,27 @@ It must have the value `tls` for the type `KafkaUserTlsClientAuthentication`.
 Used in: xref:type-KafkaUserSpec-{context}[`KafkaUserSpec`]
 
 
-The `type` property is a discriminator that distinguishes the use of the type `KafkaUserScramSha512ClientAuthentication` from xref:type-KafkaUserTlsClientAuthentication-{context}[`KafkaUserTlsClientAuthentication`].
+The `type` property is a discriminator that distinguishes the use of the type `KafkaUserScramSha512ClientAuthentication` from xref:type-KafkaUserTlsClientAuthentication-{context}[`KafkaUserTlsClientAuthentication`], xref:type-KafkaUserSaslPlainClientAuthentication-{context}[`KafkaUserSaslPlainClientAuthentication`].
 It must have the value `scram-sha-512` for the type `KafkaUserScramSha512ClientAuthentication`.
 [options="header"]
 |====
 |Field        |Description
 |type  1.2+<.<|Must be `scram-sha-512`.
+|string
+|====
+
+[id='type-KafkaUserSaslPlainClientAuthentication-{context}']
+### `KafkaUserSaslPlainClientAuthentication` schema reference
+
+Used in: xref:type-KafkaUserSpec-{context}[`KafkaUserSpec`]
+
+
+The `type` property is a discriminator that distinguishes the use of the type `KafkaUserSaslPlainClientAuthentication` from xref:type-KafkaUserTlsClientAuthentication-{context}[`KafkaUserTlsClientAuthentication`], xref:type-KafkaUserScramSha512ClientAuthentication-{context}[`KafkaUserScramSha512ClientAuthentication`].
+It must have the value `sasl-plain` for the type `KafkaUserSaslPlainClientAuthentication`.
+[options="header"]
+|====
+|Field        |Description
+|type  1.2+<.<|Must be `sasl-plain`.
 |string
 |====
 

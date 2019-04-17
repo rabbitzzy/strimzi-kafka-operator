@@ -27,7 +27,8 @@ import io.fabric8.openshift.api.model.DeploymentConfig;
 import io.fabric8.openshift.api.model.ImageChangeTrigger;
 import io.fabric8.openshift.api.model.ImageStream;
 import io.strimzi.api.kafka.model.CertSecretSourceBuilder;
-import io.strimzi.api.kafka.model.KafkaConnectAuthenticationScramSha512Builder;
+import io.strimzi.api.kafka.model.KafkaConnectAuthenticationSaslPlainBuilder;
+// import io.strimzi.api.kafka.model.KafkaConnectAuthenticationScramSha512Builder;
 import io.strimzi.api.kafka.model.KafkaConnectAuthenticationTlsBuilder;
 import io.strimzi.api.kafka.model.KafkaConnectS2I;
 import io.strimzi.api.kafka.model.KafkaConnectS2IBuilder;
@@ -385,17 +386,46 @@ public class KafkaConnectS2IClusterTest {
         assertEquals("my-secret", dep.getSpec().getTemplate().getSpec().getVolumes().get(1).getName());
     }
 
+    // @Test
+    // public void testGenerateDeploymentWithScramSha512Auth() {
+    //     KafkaConnectS2I resource = new KafkaConnectS2IBuilder(this.resource)
+    //             .editSpec()
+    //             .withAuthentication(
+    //                     new KafkaConnectAuthenticationScramSha512Builder()
+    //                             .withUsername("user1")
+    //                             .withNewPasswordSecret()
+    //                             .withSecretName("user1-secret")
+    //                             .withPassword("password")
+    //                             .endPasswordSecret()
+    //                             .build()
+    //             )
+    //             .endSpec()
+    //             .build();
+    //     KafkaConnectS2ICluster kc = KafkaConnectS2ICluster.fromCrd(resource, VERSIONS);
+    //     DeploymentConfig dep = kc.generateDeploymentConfig(Collections.emptyMap(), true, null);
+
+    //     assertEquals("user1-secret", dep.getSpec().getTemplate().getSpec().getVolumes().get(1).getName());
+
+    //     List<Container> containers = dep.getSpec().getTemplate().getSpec().getContainers();
+
+    //     assertEquals(KafkaConnectS2ICluster.PASSWORD_VOLUME_MOUNT + "user1-secret",
+    //             containers.get(0).getVolumeMounts().get(1).getMountPath());
+
+    //     assertEquals("user1-secret/password",
+    //             AbstractModel.containerEnvVars(containers.get(0)).get(KafkaConnectS2ICluster.ENV_VAR_KAFKA_CONNECT_SASL_PASSWORD_FILE));
+    //     assertEquals("user1",
+    //             AbstractModel.containerEnvVars(containers.get(0)).get(KafkaConnectS2ICluster.ENV_VAR_KAFKA_CONNECT_SASL_USERNAME));
+    // }
+
+
     @Test
-    public void testGenerateDeploymentWithScramSha512Auth() {
+    public void testGenerateDeploymentWithSaslPlain() {
         KafkaConnectS2I resource = new KafkaConnectS2IBuilder(this.resource)
                 .editSpec()
                 .withAuthentication(
-                        new KafkaConnectAuthenticationScramSha512Builder()
+                        new KafkaConnectAuthenticationSaslPlainBuilder()
                                 .withUsername("user1")
-                                .withNewPasswordSecret()
-                                .withSecretName("user1-secret")
                                 .withPassword("password")
-                                .endPasswordSecret()
                                 .build()
                 )
                 .endSpec()
@@ -403,15 +433,10 @@ public class KafkaConnectS2IClusterTest {
         KafkaConnectS2ICluster kc = KafkaConnectS2ICluster.fromCrd(resource, VERSIONS);
         DeploymentConfig dep = kc.generateDeploymentConfig(Collections.emptyMap(), true, null);
 
-        assertEquals("user1-secret", dep.getSpec().getTemplate().getSpec().getVolumes().get(1).getName());
-
         List<Container> containers = dep.getSpec().getTemplate().getSpec().getContainers();
 
-        assertEquals(KafkaConnectS2ICluster.PASSWORD_VOLUME_MOUNT + "user1-secret",
-                containers.get(0).getVolumeMounts().get(1).getMountPath());
-
-        assertEquals("user1-secret/password",
-                AbstractModel.containerEnvVars(containers.get(0)).get(KafkaConnectS2ICluster.ENV_VAR_KAFKA_CONNECT_SASL_PASSWORD_FILE));
+        assertEquals("password",
+                AbstractModel.containerEnvVars(containers.get(0)).get(KafkaConnectS2ICluster.ENV_VAR_KAFKA_CONNECT_SASL_PASSWORD));
         assertEquals("user1",
                 AbstractModel.containerEnvVars(containers.get(0)).get(KafkaConnectS2ICluster.ENV_VAR_KAFKA_CONNECT_SASL_USERNAME));
     }

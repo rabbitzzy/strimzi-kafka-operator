@@ -60,6 +60,30 @@ EOF
 )
 fi
 
+# SASL_SSL/PLAIN
+if [ -n "$KAFKA_CONNECT_SASL_USERNAME" ] && [ -n "$KAFKA_CONNECT_SASL_PASSWORD" ]; then
+    if [ "$SECURITY_PROTOCOL" = "SSL" ]; then
+        SECURITY_PROTOCOL="SASL_SSL"
+    else
+        SECURITY_PROTOCOL="SASL_PLAINTEXT"
+    fi
+
+    SASL_MECHANISM="PLAIN"
+
+    SASL_AUTH_CONFIGURATION=$(cat <<EOF
+sasl.mechanism=${SASL_MECHANISM}
+sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required required username="${KAFKA_CONNECT_SASL_USERNAME}" password="${KAFKA_CONNECT_SASL_PASSWORD}";
+
+producer.sasl.mechanism=${SASL_MECHANISM}
+producer.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="${KAFKA_CONNECT_SASL_USERNAME}" password="${KAFKA_CONNECT_SASL_PASSWORD}";
+
+consumer.sasl.mechanism=${SASL_MECHANISM}
+consumer.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="${KAFKA_CONNECT_SASL_USERNAME}" password="${KAFKA_CONNECT_SASL_PASSWORD}";
+
+EOF
+)
+fi
+
 # Write the config file
 cat <<EOF
 # Bootstrap servers
