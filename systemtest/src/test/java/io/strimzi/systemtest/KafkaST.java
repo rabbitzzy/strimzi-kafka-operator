@@ -119,9 +119,9 @@ class KafkaST extends AbstractST {
                 .filter(p -> p.getMetadata().getName().startsWith(clusterName))
                 .forEach(KUBE_CLIENT::deletePod);
 
-        oc.waitForResourceDeletion("statefulset", kafkaClusterName(clusterName));
-        oc.waitForResourceDeletion("statefulset", zookeeperClusterName(clusterName));
-        oc.waitForResourceDeletion("deployment", entityOperatorDeploymentName(clusterName));
+        StUtils.waitForStatefulSetDeletion(kafkaClusterName(clusterName));
+        StUtils.waitForStatefulSetDeletion(zookeeperClusterName(clusterName));
+        StUtils.waitForDeploymentDeletion(entityOperatorDeploymentName(clusterName));
 
 
         StUtils.waitForStatefulSetDeletion(kafkaClusterName(clusterName));
@@ -210,8 +210,8 @@ class KafkaST extends AbstractST {
         resources.kafka(kafka).done();
 
         // Wait when EO(UO + TO) will be removed
-        KUBE_CMD_CLIENT.waitForResourceDeletion("deployment", entityOperatorDeploymentName(CLUSTER_NAME));
-        KUBE_CMD_CLIENT.waitForResourceDeletion("pod", pod.get().getMetadata().getName());
+        StUtils.waitForDeploymentDeletion(entityOperatorDeploymentName(CLUSTER_NAME));
+        StUtils.waitForPodDeletion(pod.get().getMetadata().getName());
     }
 
     @Test
@@ -249,7 +249,7 @@ class KafkaST extends AbstractST {
         replaceKafkaResource(CLUSTER_NAME, k -> k.getSpec().getZookeeper().setReplicas(initialZkReplicas));
 
         for (String name : newZkPodNames) {
-            KUBE_CMD_CLIENT.waitForResourceDeletion("pod", name);
+            StUtils.waitForPodDeletion(name);
         }
 
         // Wait for one zk pods will became leader and others follower state
@@ -350,11 +350,11 @@ class KafkaST extends AbstractST {
         });
 
         for (int i = 0; i < expectedZKPods; i++) {
-            KUBE_CMD_CLIENT.waitForResourceUpdate("pod", zookeeperPodName(CLUSTER_NAME, i), zkPodStartTime.get(i));
+            StUtils.waitForPodUpdate(zookeeperPodName(CLUSTER_NAME, i), zkPodStartTime.get(i));
             StUtils.waitForPod(zookeeperPodName(CLUSTER_NAME,  i));
         }
         for (int i = 0; i < expectedKafkaPods; i++) {
-            KUBE_CMD_CLIENT.waitForResourceUpdate("pod", kafkaPodName(CLUSTER_NAME, i), kafkaPodStartTime.get(i));
+            StUtils.waitForPodUpdate(kafkaPodName(CLUSTER_NAME, i), kafkaPodStartTime.get(i));
             StUtils.waitForPod(kafkaPodName(CLUSTER_NAME,  i));
         }
 
@@ -654,7 +654,7 @@ class KafkaST extends AbstractST {
 
         //Deleting another topic using pod CLI
         deleteTopicUsingPodCLI(CLUSTER_NAME, 0, "my-topic");
-        KUBE_CMD_CLIENT.waitForResourceDeletion("kafkatopic", "my-topic");
+        StUtils.waitForKafkaTopicDeletion("my-topic");
 
         //Checking all topics were deleted
         Thread.sleep(10000L);
@@ -688,7 +688,7 @@ class KafkaST extends AbstractST {
 
         //Deleting topic
         KUBE_CMD_CLIENT.deleteByName("kafkatopic", "topic-without-labels");
-        KUBE_CMD_CLIENT.waitForResourceDeletion("kafkatopic", "topic-without-labels");
+        StUtils.waitForKafkaTopicDeletion("topic-without-labels");
 
         //Checking all topics were deleted
         List<String> topics = listTopicsUsingPodCLI(CLUSTER_NAME, 0);

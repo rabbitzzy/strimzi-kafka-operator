@@ -5,22 +5,16 @@
 package io.strimzi.systemtest;
 
 import io.strimzi.api.kafka.Crds;
-import io.strimzi.api.kafka.KafkaList;
-import io.strimzi.api.kafka.KafkaConnectList;
-import io.strimzi.api.kafka.KafkaConnectS2IList;
 import io.strimzi.api.kafka.KafkaTopicList;
-import io.strimzi.api.kafka.model.DoneableKafka;
-import io.strimzi.api.kafka.model.DoneableKafkaConnect;
-import io.strimzi.api.kafka.model.DoneableKafkaConnectS2I;
 import io.strimzi.api.kafka.model.DoneableKafkaTopic;
 import io.strimzi.api.kafka.model.Kafka;
 import io.strimzi.api.kafka.model.KafkaConnect;
 import io.strimzi.api.kafka.model.KafkaConnectS2I;
 import io.strimzi.api.kafka.model.KafkaTopic;
 import io.strimzi.api.kafka.model.PersistentClaimStorage;
+import io.strimzi.test.TestUtils;
 import io.strimzi.test.annotations.OpenShiftOnly;
 import io.strimzi.test.extensions.StrimziExtension;
-import io.strimzi.test.TestUtils;
 import io.strimzi.test.k8s.KubeClusterResource;
 import io.strimzi.test.k8s.Oc;
 import org.apache.logging.log4j.LogManager;
@@ -34,10 +28,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import java.util.List;
 
 import static io.strimzi.test.TestUtils.map;
+import static io.strimzi.test.extensions.StrimziExtension.REGRESSION;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static io.strimzi.test.extensions.StrimziExtension.REGRESSION;
 
 /**
  * Basic tests for the OpenShift templates.
@@ -55,18 +49,6 @@ public class OpenShiftTemplatesST extends AbstractST {
     public static KubeClusterResource cluster = new KubeClusterResource();
     private Oc oc = (Oc) KUBE_CMD_CLIENT;
 
-    private Kafka getKafkaWithName(String clusterName) {
-        return CLIENT.customResources(Crds.kafka(), Kafka.class, KafkaList.class, DoneableKafka.class).inNamespace(NAMESPACE).withName(clusterName).get();
-    }
-
-    private KafkaConnect getKafkaConnectWithName(String clusterName) {
-        return CLIENT.customResources(Crds.kafkaConnect(), KafkaConnect.class, KafkaConnectList.class, DoneableKafkaConnect.class).inNamespace(NAMESPACE).withName(clusterName).get();
-    }
-
-    private KafkaConnectS2I getKafkaConnectS2IWithName(String clusterName) {
-        return CLIENT.customResources(Crds.kafkaConnectS2I(), KafkaConnectS2I.class, KafkaConnectS2IList.class, DoneableKafkaConnectS2I.class).inNamespace(NAMESPACE).withName(clusterName).get();
-    }
-
     @Test
     @Tag(REGRESSION)
     void testStrimziEphemeral() {
@@ -75,7 +57,7 @@ public class OpenShiftTemplatesST extends AbstractST {
                 "ZOOKEEPER_NODE_COUNT", "1",
                 "KAFKA_NODE_COUNT", "1"));
 
-        Kafka kafka = getKafkaWithName(clusterName);
+        Kafka kafka = KUBE_CLIENT.getKafka(clusterName);
         assertNotNull(kafka);
 
         assertEquals(1, kafka.getSpec().getKafka().getReplicas());
@@ -92,7 +74,7 @@ public class OpenShiftTemplatesST extends AbstractST {
                 "ZOOKEEPER_NODE_COUNT", "1",
                 "KAFKA_NODE_COUNT", "1"));
 
-        Kafka kafka = getKafkaWithName(clusterName);
+        Kafka kafka = KUBE_CLIENT.getKafka(clusterName);
         assertNotNull(kafka);
         assertEquals(1, kafka.getSpec().getKafka().getReplicas());
         assertEquals(1, kafka.getSpec().getZookeeper().getReplicas());
@@ -114,7 +96,7 @@ public class OpenShiftTemplatesST extends AbstractST {
                 "KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR", "5"));
 
         //TODO Add assertions to check that Kafka brokers have a custom configuration
-        Kafka kafka = getKafkaWithName(clusterName);
+        Kafka kafka = KUBE_CLIENT.getKafka(clusterName);
         assertNotNull(kafka);
 
         assertEquals(30, kafka.getSpec().getZookeeper().getLivenessProbe().getInitialDelaySeconds());
@@ -146,7 +128,7 @@ public class OpenShiftTemplatesST extends AbstractST {
                 "KAFKA_VOLUME_CAPACITY", "2Gi"));
 
         //TODO Add assertions to check that Kafka brokers have a custom configuration
-        Kafka kafka = getKafkaWithName(clusterName);
+        Kafka kafka = KUBE_CLIENT.getKafka(clusterName);
         assertNotNull(kafka);
 
         assertEquals(30, kafka.getSpec().getZookeeper().getLivenessProbe().getInitialDelaySeconds());
@@ -171,7 +153,7 @@ public class OpenShiftTemplatesST extends AbstractST {
         oc.newApp("strimzi-connect", map("CLUSTER_NAME", clusterName,
                 "INSTANCES", "1"));
 
-        KafkaConnect connect = getKafkaConnectWithName(clusterName);
+        KafkaConnect connect = KUBE_CLIENT.getKafkaConnect(clusterName);
         assertNotNull(connect);
         assertEquals(1, connect.getSpec().getReplicas());
     }
@@ -183,7 +165,7 @@ public class OpenShiftTemplatesST extends AbstractST {
         oc.newApp("strimzi-connect-s2i", map("CLUSTER_NAME", clusterName,
                 "INSTANCES", "1"));
 
-        KafkaConnectS2I cm = getKafkaConnectS2IWithName(clusterName);
+        KafkaConnectS2I cm = KUBE_CLIENT.getKafkaConnectS2I(clusterName);
         assertNotNull(cm);
         assertEquals(1, cm.getSpec().getReplicas());
     }
@@ -197,7 +179,7 @@ public class OpenShiftTemplatesST extends AbstractST {
                 "TOPIC_PARTITIONS", "10",
                 "TOPIC_REPLICAS", "2"));
 
-        KafkaTopic topic = CLIENT.customResources(Crds.topic(), KafkaTopic.class, KafkaTopicList.class, DoneableKafkaTopic.class).inNamespace(NAMESPACE).withName(topicName).get();
+        KafkaTopic topic = KUBE_CLIENT.getClient().customResources(Crds.topic(), KafkaTopic.class, KafkaTopicList.class, DoneableKafkaTopic.class).inNamespace(NAMESPACE).withName(topicName).get();
         assertNotNull(topic);
         assertNotNull(topic.getSpec());
         assertNull(topic.getSpec().getTopicName());

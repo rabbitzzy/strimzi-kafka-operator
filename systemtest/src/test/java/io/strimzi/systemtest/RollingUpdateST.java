@@ -26,9 +26,9 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.CoreMatchers.is;
 import static io.strimzi.test.extensions.StrimziExtension.REGRESSION;
+import static org.hamcrest.CoreMatchers.is;
+import static org.hamcrest.MatcherAssert.assertThat;
 
 @ExtendWith(StrimziExtension.class)
 @Tag(REGRESSION)
